@@ -125,7 +125,7 @@ class ButtonPanel:
         self.app.switch_button = tk.Button(self.frame, text="Switch: OFF", command=self.app.toggle_switch)
         self.app.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode)
         self.app.help_button = tk.Button(self.frame, text="Help", command=self.app.toggle_help_mode)
-        self.app.help_text_box = tk.Text(self.frame, height=10, width=50, wrap="word")
+        self.app.help_text_box = tk.Text(self.frame, height=11, width=50, wrap="word")
         self.app.upload_button = tk.Button(self.frame, text="Upload Images", command=self.app.upload_images)
         
         self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv)
@@ -243,8 +243,12 @@ class ImageAlignerApp:
 
     def load_images(self, image_paths):
         if not isinstance(image_paths, list) or len(image_paths) != 2:
-            self.exit()
-        
+            print("Supplied images are not valid: {}".format(image_paths))
+            if self.img1 is None or self.img2 is None:
+                self.exit()
+            else:
+                return
+            
         self.img1 = cv2.imread(image_paths[0], cv2.IMREAD_UNCHANGED)
         self.img2 = cv2.imread(image_paths[1], cv2.IMREAD_UNCHANGED)
         
@@ -353,10 +357,12 @@ class ImageAlignerApp:
                         ('-', "Decrease global scale factor by 10%"),
                         ('d', "Toggle debug mode"),
                         ('c', "Toggle contrast mode"),
-                        ('t', "Toggle switch"),
-                        ('h', "Toggle homography mode"),
+                        ('t/right click', "Toggle switch"),
+                        ('ctrl', "Toggle homography mode"),
                         ('o', "Reset homography"),
-                        ('space', "Toggle viewport mode")]
+                        ('space', "Toggle viewport mode"),
+                        ('mouse wheel', "Zoom in/out"),
+                        ('middle click', "Toggle rotation mode")]
         self.help_text_box.delete('1.0', tk.END)
         if self.help_mode:
             for key, description in descriptions:
@@ -401,7 +407,7 @@ class ImageAlignerApp:
             self.toggle_contrast_mode()
         elif event.char == 't':
             self.toggle_switch()
-        elif event.char == 'h':
+        elif event.keysym == 'Control_L' or event.keysym == 'Control_R':
             self.toggle_homography_mode()
         elif event.char == 'o':
             self.reset_homography()
@@ -425,6 +431,8 @@ class ImageAlignerApp:
         self.toggle_switch()
 
     def on_mouse_wheel(self, event):
+        if not self.check_relevancy(event):
+            return
         step_size = 120
         step = event.delta / step_size
         if event.num == 4:
