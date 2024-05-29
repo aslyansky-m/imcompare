@@ -6,6 +6,8 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 
 
+window_dimensions = (1500, 900)
+
 # Global variables for image manipulation
 x_offset = 0
 y_offset = 0
@@ -25,9 +27,61 @@ debug_window = None
 debug_frame = None
 debug_mode = False
 contrast_mode = False
+homography_mode = False
+toggle = False
+anchors = []
+cur_H = np.eye(3)
+
+
+class Anchor:
+    def __init__(self, x, y, original=False):
+        self.pos0 = (x, y)
+        self.pos = (x, y)
+        self.original = original
+        self.moved = False
+    
+    def move(self, x, y):
+        self.pos = (x, y)
+        self.moved = True
+    
+    def reset(self):  
+        self.moved = False
+        self.pos0 = self.pos
+        
+    def plot(self, canvas):
+        r = 4
+        if self.original:
+            canvas.create_oval(self.pos[0] - r, self.pos[1] - r, self.pos[0] + r, self.pos[1] + r, fill='green')
+        else:
+            r0 = 3
+            canvas.create_oval(self.pos0[0] - r0, self.pos0[1] - r0, self.pos0[0] + r0, self.pos0[1] + r0, fill='yellow')
+            color = 'red' if self.moved else 'blue'
+            canvas.create_oval(self.pos[0] - r, self.pos[1] - r, self.pos[0] + r, self.pos[1] + r, fill=color)
+
+def calc_homography(anchors):
+    pts0 = np.array([anchor.pos0 for anchor in anchors], dtype=np.float32)
+    pts1 = np.array([anchor.pos for anchor in anchors], dtype=np.float32)
+    H, _ = cv2.findHomography(pts0, pts1)
+    return H
+
+def draw_anchors():
+    for anchor in anchors:
+        anchor.plot(canvas)
+        
+def new_anchors():
+    global anchors
+    w = window_dimensions[0]
+    h = window_dimensions[1]
+    m = 100
+
+    anchors_pos = [(m,m), (m, h-m), (w-m, m), (w-m, h-m)]
+    anchors = []
+    for pos in anchors_pos:
+        anchors.append(Anchor(pos[0], pos[1], original=True))
+    
 
 def on_key_press(event):
-    global next_image, rotation, alt_pressed, global_scale_factor, debug_mode, contrast_mode
+    global next_image, rotation, alt_pressed, global_scale_factor, debug_mode, contrast_mode, homography_mode, toggle
     if event.char == 'r':
         rotation = (rotation + 90) % 360
     elif event.char == '-':
@@ -38,6 +92,11 @@ def on_key_press(event):
         debug_mode = not debug_mode
     elif event.char == 'c':
         contrast_mode = not contrast_mode
+    elif event.char == 't':
+        toggle = not toggle
+    elif event.char == 'h':
+        homography_mode = not homography_mode
+        new_anchors()
     elif event.keysym == 'Alt_L' or event.keysym == 'Alt_R':
         alt_pressed = True
     update_image()
@@ -58,6 +117,22 @@ def on_mouse_wheel(event):
 
 def on_mouse_press(event):
     global drag_start_x, drag_start_y, dragging, slider_active
+    if homography_mode:
+        global anchors
+        min_dist = -1
+        closest_anchor = None
+        for anchor in anchors:
+            dist = (anchor.pos[0] - event.x)**2 + (anchor.pos[1] - event.y)**2
+            if min_dist < 0 or dist < min_dist:
+                min_dist = dist
+                closest_anchor = anchor
+        # create new anchor
+        new_anchor = Anchor(event.x, event.y)
+        anchors.remove(closest_anchor)
+        anchors.append(new_anchor)
+        update_image()
+        return
+        
     if not slider_active:
         drag_start_x = event.x
         drag_start_y = event.y
@@ -65,6 +140,11 @@ def on_mouse_press(event):
 
 def on_mouse_drag(event):
     global x_offset, y_offset, drag_start_x, drag_start_y, dragging, slider_active, alt_pressed, global_x_offset, global_y_offset, global_scale_factor
+    if homography_mode:
+        global anchors
+        anchors[-1].move(event.x, event.y)
+        update_image()
+        return
     if dragging and not slider_active:
         if alt_pressed:
             global_x_offset += event.x - drag_start_x
@@ -78,6 +158,13 @@ def on_mouse_drag(event):
 
 def on_mouse_release(event):
     global dragging
+    if homography_mode:
+        global anchors, cur_H
+        cur_H = calc_homography(anchors) @ cur_H
+        for anchor in anchors:
+            anchor.reset()  
+        update_image()
+        return
     dragging = False
 
 def show_debug_info():
@@ -103,6 +190,7 @@ def show_debug_info():
 
 def update_image():
     global img1, img2, x_offset, y_offset, scale_factor, rotation, alpha_blending, alt_pressed
+    global tk_image, anchors, homography_mode, toggle
 
     if img1 is None or img2 is None:
         return
@@ -117,14 +205,26 @@ def update_image():
         M_combined = M_combined_3x3[:2, :]
         return M_combined
     
-    M = calc_transform(img2.shape, scale_factor, rotation, x_offset, y_offset)
-    img2_cropped = cv2.warpAffine(img2, M, (img2.shape[1],img2.shape[0]))
+    im1 = img1.copy()
+    im2 = img2.copy()
+    
+    M = calc_transform(im2.shape, scale_factor, rotation, x_offset, y_offset)
+    im2 = cv2.warpAffine(im2, M, (im2.shape[1],im2.shape[0]))
+    
+    H = calc_homography(anchors)
+    im2 = cv2.warpPerspective(im2, H @ cur_H, (im2.shape[1], im2.shape[0]))
+    
+
+    if toggle:
+        [im1, im2] = [im2, im1]
+            
     if contrast_mode:
-        img_a = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-        img_b = cv2.cvtColor(img2_cropped, cv2.COLOR_BGR2GRAY)
-        blend_image = np.stack([img_a, img_b, img_b], axis=-1)
+        im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
+        im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+        blend_image = np.stack([im1, im2, im1], axis=-1)
     else:
-        blend_image = cv2.addWeighted(img1, 1 - alpha_blending, img2_cropped, alpha_blending, 0)
+        blend_image = cv2.addWeighted(im1, 1 - alpha_blending, im2, alpha_blending, 0)
+        
     
     M_global = calc_transform(blend_image.shape, global_scale_factor, 0, global_x_offset, global_y_offset)
     blend_image = cv2.warpAffine(blend_image, M_global, (blend_image.shape[1], blend_image.shape[0]))
@@ -132,12 +232,16 @@ def update_image():
     if alt_pressed:
         blend_image = (blend_image*0.8).astype(np.uint8)
     
-    # Convert to ImageTk format and update panel
+    # Convert to ImageTk format and update canvas
     img_rgb = cv2.cvtColor(blend_image, cv2.COLOR_BGR2RGB)
     img_pil = Image.fromarray(img_rgb)
     tk_image = ImageTk.PhotoImage(img_pil)
-    panel.config(image=tk_image)
-    panel.image = tk_image
+    canvas.delete('all')
+    canvas.create_image(0, 0, anchor=tk.NW, image=tk_image)
+
+    
+    if homography_mode:
+        draw_anchors()
     
     if debug_mode:
         show_debug_info()
@@ -162,15 +266,14 @@ def on_slider_release(event):
     slider_active = False
 
 def main():
-    global img1, img2, panel, window_dimensions
-    global x_offset, y_offset, scale_factor, rotation, next_image
+    global img1, img2, canvas, window_dimensions
+    global x_offset, y_offset, scale_factor, rotation, anchors
 
-     # Set up the TKinter window
-    window_dimensions = (1500, 900)
+    # Set up the TKinter window
     window = tk.Tk()
     window.title("Manual Image Alignment Tool")
     window.geometry(f"{window_dimensions[0]}x{window_dimensions[1]}")
-    window.configure(background='grey')
+    # window.configure(background='grey')
     
     def exit(event):
         window.quit()
@@ -196,9 +299,6 @@ def main():
     # output_folder = filedialog.askdirectory(title='Select output folder...')
     output_folder = 'output/'
 
-    # Panel to display images
-    panel = tk.Label(window)
-    panel.pack(side="top", fill="both", expand="yes")
 
     # Frame for sliders
     slider_frame = tk.Frame(window, bg='grey')
@@ -225,6 +325,19 @@ def main():
     scale_ratio = min(window_dimensions[0]/img1.shape[1], window_dimensions[1]/img1.shape[0])
     img1 = cv2.resize(img1, (0,0), fx=scale_ratio, fy=scale_ratio)
     img2 = cv2.resize(img2, (0,0), fx=scale_ratio, fy=scale_ratio)
+    
+
+    
+    new_anchors()
+    
+
+    
+    # canvas to display images
+    canvas = tk.Canvas(window, width=window_dimensions[0], height=window_dimensions[1])
+    img_pil = Image.fromarray(img1)
+    tk_image = ImageTk.PhotoImage(img_pil)
+    image_container = canvas.create_image(0, 0, anchor=tk.NW, image=tk_image)
+    canvas.pack()
 
     x_offset, y_offset, scale_factor, rotation = 0, 0, 1.0, 0
 
