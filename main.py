@@ -356,7 +356,7 @@ class ImageAlignerApp:
                         ('t', "Toggle switch"),
                         ('h', "Toggle homography mode"),
                         ('o', "Reset homography"),
-                        ('alt', "Toggle viewport mode")]
+                        ('space', "Toggle viewport mode")]
         self.help_text_box.delete('1.0', tk.END)
         if self.help_mode:
             for key, description in descriptions:
@@ -405,7 +405,7 @@ class ImageAlignerApp:
             self.toggle_homography_mode()
         elif event.char == 'o':
             self.reset_homography()
-        elif event.keysym == 'Alt_L' or event.keysym == 'Alt_R':
+        elif event.char == ' ':
             self.toggle_viewport_mode()
         self.update_image()
 
