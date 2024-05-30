@@ -606,8 +606,10 @@ class ImageAlignerApp:
 
 def main():
     root = tk.Tk()
-    root.title("Manual Image Alignment Tool")
+    root.title("TagIm Aligner")
     root.geometry(f"{window_size[0]+400}x{window_size[1]}")
+    photo = ImageTk.PhotoImage(Image.open('resources/logo.png'))
+    root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root, ImagePair("input/im1.jpeg", "input/im3.jpeg"))
 
