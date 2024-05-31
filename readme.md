@@ -1,3 +1,3 @@
-##### imcompare
+# TagIm
 
-![image info](./resources/TagIM.png)
+![Oops](resources/TagIm.png)
