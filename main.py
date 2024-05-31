@@ -241,8 +241,9 @@ class DebugInfo:
         
         # Display all global variables
         app_vars = vars(self.app)
-        for var_name, var_value in app_vars.items():
-            if isinstance(var_value,np.ndarray):
+        image_vars = vars(self.app.images)
+        for var_name, var_value in {**app_vars, **image_vars}.items():
+            if isinstance(var_value,np.ndarray) or var_value == self.app.images:
                 continue
             label = tk.Label(self.debug_frame, text=f"{var_name}: {var_value}", bg='grey')
             label.pack(side="top", anchor="w", padx=10, pady=5)
@@ -259,13 +260,13 @@ class ButtonPanel:
         self.image_pairs = []
 
     def create_widgets(self):
-        self.alpha_slider = tk.Scale(self.frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Alpha Blending", command=self.app.update_alpha)
+        self.alpha_slider = tk.Scale(self.frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Alpha Blending", command=self.app.update_alpha,bg='white')
         self.alpha_slider.set(self.app.alpha)
         
-        self.rotation_slider = tk.Scale(self.frame, from_=-180, to=180, resolution=1, orient=tk.HORIZONTAL, label="Rotation", command=self.app.update_rotation)
+        self.rotation_slider = tk.Scale(self.frame, from_=-180, to=180, resolution=1, orient=tk.HORIZONTAL, label="Rotation", command=self.app.update_rotation,bg='white')
         self.rotation_slider.set(self.app.images.rotation)
 
-        self.scale_slider = tk.Scale(self.frame, from_=-1, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Scale Factor", command=lambda x: self.app.update_scale(np.power(10,float(x))))
+        self.scale_slider = tk.Scale(self.frame, from_=-1, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Scale Factor", command=lambda x: self.app.update_scale(np.power(10,float(x))),bg='white')
         self.scale_slider.set(np.log10(self.app.images.scale))
 
         self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode)
@@ -273,7 +274,7 @@ class ButtonPanel:
         self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching)
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode)
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode)
-        self.switch_button = tk.Button(self.frame, text="Switch: OFF", command=self.app.toggle_switch)
+        self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_switch)
         self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode)
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode)
         self.help_frame = tk.Frame(self.frame)
@@ -488,14 +489,10 @@ class ImageAlignerApp:
         self.images.scale = np.clip(float(val),0.1,10)
         self.button_panel.scale_slider.set(np.log10(self.images.scale))
         self.render()
-
-    def toggle_debug_mode(self):
-        self.debug_mode = not self.debug_mode
-        self.button_panel.debug_button.config(text="Debug Mode:  ON" if self.debug_mode else "Debug Mode: OFF")
         
     def toggle_help_mode(self):
         self.help_mode = not self.help_mode
-        self.button_panel.help_button.config(text="Help:  ON" if self.help_mode else "Help: OFF")
+        self.button_panel.help_button.config(text="Help:  ON" if self.help_mode else "Help: OFF", bg=('grey' if self.help_mode else 'white'))
         descriptions = [('r', "Rotate by 90 degrees"),
                         ('+', "Zoom in 10%"),
                         ('-', "Zoom out 10%"),
@@ -519,17 +516,17 @@ class ImageAlignerApp:
         self.homography_mode = not self.homography_mode
         if len(self.images.anchors) == 0:
             self.images.reset_anchors()
-        self.button_panel.homography_button.config(text="Homography Mode:  ON" if self.homography_mode else "Homography Mode: OFF")
+        self.button_panel.homography_button.config(text="Homography Mode:  ON" if self.homography_mode else "Homography Mode: OFF", bg=('grey' if self.homography_mode else 'white'))
         self.render()
 
     def toggle_contrast_mode(self):
         self.contrast_mode = not self.contrast_mode
-        self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF")
+        self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF", bg=('grey' if self.contrast_mode else 'white'))
         self.render()
 
     def toggle_switch(self):
         self.toggle = not self.toggle
-        self.button_panel.switch_button.config(text="Switch:  ON" if self.toggle else "Switch: OFF")
+        self.button_panel.switch_button.config(text="Switch Images:  ON" if self.toggle else "Switch Images: OFF", bg=('grey' if self.toggle else 'white'))
         self.render()
 
     def reset_homography(self):
@@ -545,7 +542,13 @@ class ImageAlignerApp:
 
     def toggle_viewport_mode(self):
         self.viewport_mode = not self.viewport_mode
-        self.button_panel.viewport_button.config(text="Viewport Mode:  ON" if self.viewport_mode else "Viewport Mode: OFF")
+        self.button_panel.viewport_button.config(text="Viewport Mode:  ON" if self.viewport_mode else "Viewport Mode: OFF", bg=('grey' if self.viewport_mode else 'white'))
+        self.render()
+        
+    def toggle_debug_mode(self):
+        self.debug_mode = not self.debug_mode
+        self.button_panel.debug_button.config(text="Debug Mode:  ON" if self.debug_mode else "Debug Mode: OFF", bg=('grey' if self.debug_mode else 'white'))
+        self.render()
     
     def on_key_press(self, event):
         if event.char == 'r':
