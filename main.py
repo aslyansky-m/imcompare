@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
 
-window_size = (1500, 900)
+window_size = (1050, 700)
 DEBUG = True
 
 class Anchor:
@@ -139,14 +139,14 @@ class ImagePair:
         self.scale_ratio = min(window_size[0]/self.img1.shape[1], window_size[1]/self.img1.shape[0])
         self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
         
-    def reset_anchors(self, M_aux = np.eye(3)):        
+    def reset_anchors(self):        
         if self.img2 is not None:
             m = 30
             w = self.img2.shape[1]
             h = self.img2.shape[0]
             anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
             M = calc_transform((self.img2.shape[1]*self.scale_ratio,self.img2.shape[0]*self.scale_ratio), self.scale, self.rotation, self.x_offset, self.y_offset)
-            anchors_pos = [apply_homography(M_aux @ M @ self.M_original, pos) for pos in anchors_pos]
+            anchors_pos = [apply_homography(self.M_anchors @ M @ self.M_original, pos) for pos in anchors_pos]
             self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
         else:
             m = 100
@@ -165,7 +165,7 @@ class ImagePair:
         self.x_offset = 0
         self.y_offset = 0
         self.M_anchors = self.M_original @ H @ np.linalg.inv(self.M_original)
-        self.reset_anchors(self.M_anchors)
+        self.reset_anchors()
         return True
  
     def render(self, app):
@@ -262,21 +262,22 @@ class ButtonPanel:
         self.alpha_slider = tk.Scale(self.frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Alpha Blending", command=self.app.update_alpha)
         self.alpha_slider.set(self.app.alpha)
         
-        self.rotation_slider = tk.Scale(self.frame, from_=0, to=360, resolution=1, orient=tk.HORIZONTAL, label="Rotation", command=self.app.update_rotation)
+        self.rotation_slider = tk.Scale(self.frame, from_=-180, to=180, resolution=1, orient=tk.HORIZONTAL, label="Rotation", command=self.app.update_rotation)
         self.rotation_slider.set(self.app.images.rotation)
 
-        self.scale_slider = tk.Scale(self.frame, from_=0.1, to=10, resolution=0.01, orient=tk.HORIZONTAL, label="Scale Factor", command=self.app.update_scale)
-        self.scale_slider.set(self.app.images.scale)
+        self.scale_slider = tk.Scale(self.frame, from_=-1, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Scale Factor", command=lambda x: self.app.update_scale(np.power(10,float(x))))
+        self.scale_slider.set(np.log10(self.app.images.scale))
 
         self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode)
         self.homography_reset_button = tk.Button(self.frame, text="Reset Homography", command=self.app.reset_homography)
+        self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching)
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode)
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode)
         self.switch_button = tk.Button(self.frame, text="Switch: OFF", command=self.app.toggle_switch)
         self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode)
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode)
         self.help_frame = tk.Frame(self.frame)
-        self.help_text_box = tk.Text(self.help_frame, height=10, width=30, wrap="word")
+        self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word")
         self.help_text_box.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.help_scrollbar = tk.Scrollbar(self.help_frame, command=self.help_text_box.yview)
         self.help_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
@@ -299,17 +300,18 @@ class ButtonPanel:
         self.scale_slider.grid(row=2, column=0, sticky='ew')
         self.homography_button.grid(row=3, column=0, sticky='ew')
         self.homography_reset_button.grid(row=4, column=0, sticky='ew')
-        self.viewport_button.grid(row=5, column=0, sticky='ew')
-        self.contrast_button.grid(row=6, column=0, sticky='ew')
-        self.switch_button.grid(row=7, column=0, sticky='ew')
-        self.debug_button.grid(row=8, column=0, sticky='ew')
-        self.help_button.grid(row=9, column=0, sticky='ew')
-        self.help_frame.grid(row=10, column=0, sticky='ew')
-        self.upload_button.grid(row=11, column=0, sticky='ew')
-        self.load_csv_button.grid(row=12, column=0, sticky='ew')
-        self.next_image_button.grid(row=13, column=0, sticky='ew')
-        self.save_results_button.grid(row=14, column=0, sticky='ew')
-        self.image_list_frame.grid(row=15, column=0, sticky='ew')
+        self.homography_calculate_button.grid(row=5, column=0, sticky='ew')
+        self.viewport_button.grid(row=6, column=0, sticky='ew')
+        self.contrast_button.grid(row=7, column=0, sticky='ew')
+        self.switch_button.grid(row=8, column=0, sticky='ew')
+        self.debug_button.grid(row=9, column=0, sticky='ew')
+        self.help_button.grid(row=10, column=0, sticky='ew')
+        self.help_frame.grid(row=11, column=0, sticky='ew')
+        self.upload_button.grid(row=12, column=0, sticky='ew')
+        self.load_csv_button.grid(row=13, column=0, sticky='ew')
+        self.next_image_button.grid(row=14, column=0, sticky='ew')
+        self.save_results_button.grid(row=15, column=0, sticky='ew')
+        self.image_list_frame.grid(row=16, column=0, sticky='ew')
 
         self.frame.grid_columnconfigure(0, weight=1)
         
@@ -331,11 +333,13 @@ class ButtonPanel:
                 new_pair = ImagePair(image_path1, image_path2)
                 if new_pair.valid:
                     new_pairs.append(new_pair)
-                    self.image_listbox.insert(tk.END, image_path2)
                 else:
                     self.app.display_message(f"ERROR: {new_pair.error_message}")
         if len(new_pairs) > 0:
+            self.image_listbox.delete(0,tk.END)
             self.app.display_message(f"Loaded {len(new_pairs)} image pairs from {file_path}")
+            for pair in new_pairs:
+                self.image_listbox.insert(tk.END, pair.img2_path.split('/')[-1])
             self.image_pairs = new_pairs
         else:
             self.app.display_message("ERROR: No valid image pairs found in CSV")
@@ -475,24 +479,22 @@ class ImageAlignerApp:
     
     def update_rotation(self, val):
         self.move_anchors()
-        self.images.rotation = int(val)
+        self.images.rotation = (int(val) + 180)%360 -180
         self.button_panel.rotation_slider.set(self.images.rotation)
         self.render()
         
     def update_scale(self, val):
         self.move_anchors()
         self.images.scale = np.clip(float(val),0.1,10)
-        self.button_panel.scale_slider.set(self.images.scale)
+        self.button_panel.scale_slider.set(np.log10(self.images.scale))
         self.render()
 
     def toggle_debug_mode(self):
         self.debug_mode = not self.debug_mode
-        self.render()
         self.button_panel.debug_button.config(text="Debug Mode:  ON" if self.debug_mode else "Debug Mode: OFF")
         
     def toggle_help_mode(self):
         self.help_mode = not self.help_mode
-        self.render()
         self.button_panel.help_button.config(text="Help:  ON" if self.help_mode else "Help: OFF")
         descriptions = [('r', "Rotate by 90 degrees"),
                         ('+', "Zoom in 10%"),
@@ -517,22 +519,29 @@ class ImageAlignerApp:
         self.homography_mode = not self.homography_mode
         if len(self.images.anchors) == 0:
             self.images.reset_anchors()
-        self.render()
         self.button_panel.homography_button.config(text="Homography Mode:  ON" if self.homography_mode else "Homography Mode: OFF")
+        self.render()
 
     def toggle_contrast_mode(self):
         self.contrast_mode = not self.contrast_mode
-        self.render()
         self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF")
+        self.render()
 
     def toggle_switch(self):
         self.toggle = not self.toggle
-        self.render()
         self.button_panel.switch_button.config(text="Switch:  ON" if self.toggle else "Switch: OFF")
+        self.render()
 
     def reset_homography(self):
         self.images.reset_anchors()
         self.images.M_anchors = np.eye(3)
+        self.render()
+        
+    def run_matching(self):
+        ret = self.images.run_matching()
+        if not ret:
+            self.display_message('ERROR: Could not calculate homography')
+        self.render()
 
     def toggle_viewport_mode(self):
         self.viewport_mode = not self.viewport_mode
@@ -540,7 +549,7 @@ class ImageAlignerApp:
     
     def on_key_press(self, event):
         if event.char == 'r':
-            self.update_rotation((self.images.rotation + 90) % 360)
+            self.update_rotation(self.images.rotation + 90)
         elif event.char == '-':
             self.global_scale *= 0.9
         elif event.char == '=':
@@ -556,9 +565,7 @@ class ImageAlignerApp:
         elif event.char == 'o':
             self.reset_homography()
         elif event.char == 'a':
-            ret = self.images.run_matching()
-            if not ret:
-                self.display_message('ERROR: Could not calculate homography')
+            self.run_matching()
         elif event.char == ' ':
             self.toggle_viewport_mode()
         elif event.keysym == 'Right':
@@ -595,7 +602,7 @@ class ImageAlignerApp:
             self.global_scale = max(self.global_scale * (1.05 ** step), 0.1)
         else:
             if self.rotation_mode:
-                self.update_rotation((self.images.rotation - step)%360)
+                self.update_rotation(self.images.rotation - step)
             elif not self.homography_mode:
                 self.update_scale(self.images.scale * (1.02 ** step))
         self.render()
@@ -679,7 +686,9 @@ def main():
     photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
     root.wm_iconphoto(False, photo)
 
-    app = ImageAlignerApp(root, ImagePair("input/im1.jpeg", "input/im3.jpeg"))
+    image_pair = ImagePair("input/im1.jpeg", "input/im3.jpeg")
+    
+    app = ImageAlignerApp(root, image_pair if DEBUG else None)
 
     root.mainloop()
 
