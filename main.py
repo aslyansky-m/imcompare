@@ -480,7 +480,8 @@ class ImageAlignerApp:
     
     def update_rotation(self, val):
         self.move_anchors()
-        self.images.rotation = (int(val) + 180)%360 -180
+        val = int(val)
+        self.images.rotation = ((val + 180)%360 -180) if val != 180 else 180
         self.button_panel.rotation_slider.set(self.images.rotation)
         self.render()
         
