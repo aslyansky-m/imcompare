@@ -245,9 +245,15 @@ class DebugInfo:
         for var_name, var_value in {**app_vars, **image_vars}.items():
             if isinstance(var_value,np.ndarray) or var_value == self.app.images:
                 continue
-            label = tk.Label(self.debug_frame, text=f"{var_name}: {var_value}", bg='grey')
-            label.pack(side="top", anchor="w", padx=10, pady=5)
-            self.label_widgets.append(label)
+            try:
+                label = tk.Label(self.debug_frame, text=f"{var_name}: {var_value}", bg='grey')
+                label.pack(side="top", anchor="w", padx=10, pady=5)
+                self.label_widgets.append(label)
+            except:
+                self.debug_window = None
+                self.debug_frame = None
+                self.app.toggle_debug_mode()
+                return
 
 class ButtonPanel:
     def __init__(self, root, app):
@@ -698,4 +704,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
