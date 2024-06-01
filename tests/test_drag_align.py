@@ -168,6 +168,9 @@ def main():
      # Set up the TKinter window
     window_dimensions = (1500, 900)
     window = tk.Tk()
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    print(screen_width, screen_height)
     window.title("Manual Image Alignment Tool")
     window.geometry(f"{window_dimensions[0]}x{window_dimensions[1]}")
     window.configure(background='grey')

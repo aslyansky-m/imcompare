@@ -8,7 +8,9 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
 
-window_size = (1050, 700)
+screen_size = (1080, 700)
+window_size = screen_size
+SCREEN_FACTOR = 0.7
 DEBUG = True
 
 class Anchor:
@@ -275,29 +277,29 @@ class ButtonPanel:
         self.scale_slider = tk.Scale(self.frame, from_=-1, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Scale Factor", command=lambda x: self.app.update_scale(np.power(10,float(x))),bg='white')
         self.scale_slider.set(np.log10(self.app.images.scale))
 
-        self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode)
-        self.homography_reset_button = tk.Button(self.frame, text="Reset Homography", command=self.app.reset_homography)
-        self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching)
-        self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode)
-        self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode)
-        self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_switch)
-        self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode)
-        self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode)
+        self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode,bg='white')
+        self.homography_reset_button = tk.Button(self.frame, text="Reset Homography", command=self.app.reset_homography,bg='white')
+        self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching,bg='white')
+        self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
+        self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
+        self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_switch,bg='white')
+        self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
+        self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         self.help_frame = tk.Frame(self.frame)
-        self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word")
+        self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word",bg='white')
         self.help_text_box.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.help_scrollbar = tk.Scrollbar(self.help_frame, command=self.help_text_box.yview)
         self.help_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.help_text_box['yscrollcommand'] = self.help_scrollbar.set
-        self.upload_button = tk.Button(self.frame, text="Upload Images", command=self.app.upload_images)
         
-        self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv)
-        self.save_results_button = tk.Button(self.frame, text="Save Results", command=self.save_results)
-        self.next_image_button = tk.Button(self.frame, text="Next Image", command=self.next_image)
-        self.image_list_frame = tk.Frame(self.frame)
-        self.image_list_scrollbar = tk.Scrollbar(self.image_list_frame)
+        self.upload_button = tk.Button(self.frame, text="Upload Images", command=self.app.upload_images,bg='white')
+        self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv,bg='white')
+        self.save_results_button = tk.Button(self.frame, text="Save Results", command=self.save_results,bg='white')
+        self.next_image_button = tk.Button(self.frame, text="Next Image", command=self.next_image,bg='white')
+        self.image_list_frame = tk.Frame(self.frame,bg='white')
+        self.image_list_scrollbar = tk.Scrollbar(self.image_list_frame,bg='white')
         self.image_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.image_listbox = tk.Listbox(self.image_list_frame, yscrollcommand=self.image_list_scrollbar.set)
+        self.image_listbox = tk.Listbox(self.image_list_frame, yscrollcommand=self.image_list_scrollbar.set,bg='white')
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.image_listbox.bind('<<ListboxSelect>>', self.select_image)
         self.image_list_scrollbar.config(command=self.image_listbox.yview)
@@ -377,6 +379,8 @@ class ButtonPanel:
     
     def step_image(self, sign):
         if len(self.image_pairs) == 0:
+            self.app.clear_messages()
+            self.app.display_message("ERROR: No image pairs loaded")
             return
         self.current_index = (self.current_index + sign) % len(self.image_pairs)
         self.image_listbox.selection_clear(0, tk.END)
@@ -392,6 +396,10 @@ class ButtonPanel:
         self.step_image(-1)
 
     def select_image(self, event):
+        if len(self.image_pairs) == 0:
+            self.app.clear_messages()
+            self.app.display_message("ERROR: No image pairs loaded")
+            return
         self.current_index = self.image_listbox.curselection()[0]
         self.app.images = self.image_pairs[self.current_index]
         self.app.render()
@@ -691,8 +699,11 @@ class ImageAlignerApp:
 
 def main():
     root = tk.Tk()
-    root.title("TagIm Aligner")
-    root.geometry(f"{int(window_size[0]*1.2)}x{window_size[1]}")
+    global window_size, screen_size
+    screen_size = (int(root.winfo_screenwidth()*SCREEN_FACTOR), int(root.winfo_screenheight()*SCREEN_FACTOR))
+    window_size = (int(screen_size[0]*0.8), screen_size[1])
+    root.title("TagIm Aligning App")
+    root.geometry(f"{screen_size[0]}x{screen_size[1]}")
     photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
     root.wm_iconphoto(False, photo)
 
