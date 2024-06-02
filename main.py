@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
 
-window_size = (1050, 700)
+window_size = (1920, 1080)
 DEBUG = True
 
 class Anchor:
@@ -61,21 +61,6 @@ def sift_matching_with_homography(img1, img2):
     else:
         return None
 
-def decompose_homography(H):
-    tx = H[0, 2]
-    ty = H[1, 2]
-    H1 = H[:, 0]
-    H2 = H[:, 1]
-    scale_x = np.linalg.norm(H1)
-    scale_y = np.linalg.norm(H2)
-    scale = (scale_x + scale_y) / 2.0
-    H1_normalized = H1 / scale_x
-    H2_normalized = H2 / scale_y
-    rotation_rad = np.arctan2(H1_normalized[1], H1_normalized[0])
-    rotation_deg = np.degrees(rotation_rad)
-    
-    return scale, rotation_deg, tx, ty
-
 def calc_transform(shape, scale, rotation, x_offset, y_offset):
     cols, rows = shape[:2]
     M1 = cv2.getRotationMatrix2D((cols/2, rows/2), rotation, scale)
@@ -93,14 +78,44 @@ def calc_homography(anchors):
     H, _ = cv2.findHomography(pts0, pts1)
     return H
 
+def decompose_homography(H, image_size, scale_ratio):
+    h, w = image_size[:2]
+    corners = np.array([[0, 0], [w-1, 0], [w-1, h-1], [0, h-1]], dtype=np.float32).reshape(-1, 1, 2)
+    transformed_corners = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
+    M, _ = cv2.estimateAffinePartial2D(corners.reshape(-1, 2), transformed_corners)
+
+    scale = np.sqrt(np.linalg.det(M[:2,:2]))
+    rotation = -np.rad2deg(np.arctan2(M[1, 0], M[0, 0]))
+
+    M2 = calc_transform((w*scale_ratio,h*scale_ratio),scale,rotation,0,0)
+    M1 = np.vstack([M, [0, 0, 1]])
+    M3 = M1@np.linalg.inv(M2)
+    translation = M3[:2, 2]
+
+    H1 = calc_transform((w*scale_ratio,h*scale_ratio), scale, rotation, translation[0], translation[1])
+    H2 = H@np.linalg.inv(H1)
+
+    return translation, rotation, scale, H2
+
 def apply_homography(H, point):
     pt = np.array([point[0], point[1], 1])
     pt = H @ pt
     pt = pt[:2]/pt[2]
     return pt
 
+def draw_grid(image, grid_spacing, color=(192, 192, 192), thickness=1):
+    height, width = image.shape[:2]
+    
+    for x in range(0, width, grid_spacing):
+        cv2.line(image, (x, 0), (x, height), color, thickness)
+    
+    for y in range(0, height, grid_spacing):
+        cv2.line(image, (0, y), (width, y), color, thickness)
+    
+    return image
+
 class ImagePair:
-    def __init__(self, img1_path, img2_path):
+    def __init__(self, img1_path, img2_path, M_anchors = np.eye(3)):
         self.img1_path = img1_path
         self.img2_path = img2_path
         self.valid = True
@@ -110,12 +125,15 @@ class ImagePair:
         self.y_offset = 0
         self.anchors = []
         self.scale_ratio = 1.0
-        self.M_anchors = np.eye(3)
+        self.M_anchors = M_anchors
         self.M_original = np.eye(3)
         self.error_message = ''
         self.img1 = None
         self.img2 = None
-        
+
+        self.state_stack = []
+        self.current_state_index = -1
+
         try:
             self.img1 = cv2.cvtColor(cv2.imread(img1_path), cv2.COLOR_BGR2RGB)
         except:
@@ -124,30 +142,61 @@ class ImagePair:
             self.img2 = cv2.cvtColor(cv2.imread(img2_path), cv2.COLOR_BGR2RGB)
         except:
             pass
-        
+
         if self.img1 is None or self.img2 is None:
             bad_images = []
             if self.img1 is None:
                 bad_images.append(img1_path)
             if self.img2 is None:
                 bad_images.append(img2_path)
-                
+
             self.error_message = f"Could not load image(s): {', '.join(bad_images)}"
             self.valid = False
             return
 
-        self.scale_ratio = min(window_size[0]/self.img1.shape[1], window_size[1]/self.img1.shape[0])
+        self.scale_ratio = min(window_size[0] / self.img1.shape[1], window_size[1] / self.img1.shape[0])
         self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-        
-    def reset_anchors(self):        
+
+        self.initialize_from_homography(np.linalg.inv(self.M_original) @ M_anchors @ self.M_original)
+        self.save_state()
+
+    def save_state(self):
+        current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors)
+        if len(self.state_stack) > 0 and self.state_stack[self.current_state_index] == current_state:
+            return  # Avoid saving duplicate states
+        self.state_stack = self.state_stack[:self.current_state_index + 1]
+        self.state_stack.append(current_state)
+        self.current_state_index += 1
+
+    def undo(self):
+        if self.current_state_index > 0:
+            self.current_state_index -= 1
+            self.load_state()
+
+    def redo(self):
+        if self.current_state_index < len(self.state_stack) - 1:
+            self.current_state_index += 1
+            self.load_state()
+    
+    def is_identity(self):
+        return self.x_offset == 0 and self.y_offset == 0 and self.scale == 1.0 and self.rotation == 0 \
+                and np.linalg.norm(self.M_anchors-np.eye(3)) < 1e-6
+
+    def load_state(self):
+        if 0 <= self.current_state_index < len(self.state_stack):
+            state = self.state_stack[self.current_state_index]
+            self.scale, self.rotation, self.x_offset, self.y_offset, anchor_states, self.M_anchors = state
+            self.anchors = [Anchor(pos[0], pos[1], original) for pos, original in anchor_states]
+
+    def reset_anchors(self):
         if self.img2 is not None:
             m = 30
             w = self.img2.shape[1]
             h = self.img2.shape[0]
             anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
-            M = calc_transform((self.img2.shape[1]*self.scale_ratio,self.img2.shape[0]*self.scale_ratio), self.scale, self.rotation, self.x_offset, self.y_offset)
+            M = calc_transform((self.img2.shape[1] * self.scale_ratio, self.img2.shape[0] * self.scale_ratio), self.scale, self.rotation, self.x_offset, self.y_offset)
             anchors_pos = [apply_homography(self.M_anchors @ M @ self.M_original, pos) for pos in anchors_pos]
-            self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
+            self.anchors = [Anchor(np.clip(x, m, window_size[0]-m), np.clip(y, m, window_size[1]-m), original=True) for x, y in anchors_pos]
         else:
             m = 100
             w = window_size[0]
@@ -155,33 +204,40 @@ class ImagePair:
             anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
             self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
     
+    def initialize_from_homography(self, H):
+        H_ = self.M_original @ H @ np.linalg.inv(self.M_original)
+        translation, rotation, scale, H2 = decompose_homography(H_, self.img2.shape, self.scale_ratio)
+
+        self.scale = scale
+        self.rotation = rotation
+        self.x_offset = translation[0]
+        self.y_offset = translation[1]
+        self.M_anchors = H2
+        self.reset_anchors()
+        return 
+
     def run_matching(self):
         H = sift_matching_with_homography(self.img2, self.img1)
         if H is None:
             return False
         
-        self.scale = 1.0
-        self.rotation = 0
-        self.x_offset = 0
-        self.y_offset = 0
-        self.M_anchors = self.M_original @ H @ np.linalg.inv(self.M_original)
-        self.reset_anchors()
+        self.initialize_from_homography(H)
         return True
- 
+
     def render(self, app):
         if not self.valid:
             return np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
-        
-        M = calc_transform([self.img2.shape[1]*self.scale_ratio, self.img2.shape[0]*self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
+
+        M = calc_transform([self.img2.shape[1] * self.scale_ratio, self.img2.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
         M_global = app.M_global()
-        
+
         im1 = cv2.warpPerspective(self.img1, M_global @ self.M_original, window_size)
         im2 = cv2.warpPerspective(self.img2, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
 
         if app.toggle:
             im1, im2 = im2, im1
-            
+
         if app.contrast_mode:
             im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
             im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
@@ -191,9 +247,9 @@ class ImagePair:
 
         if app.viewport_mode:
             blend_image = (blend_image * 0.7).astype(np.uint8)
-            
+
         return blend_image
-    
+
     def push_anchor(self, pt):
         min_dist = -1
         closest_anchor = None
@@ -205,16 +261,17 @@ class ImagePair:
         new_anchor = Anchor(pt[0], pt[1])
         self.anchors.remove(closest_anchor)
         self.anchors.append(new_anchor)
-    
+        self.save_state()
+
     def relative_transform(self):
-        M = calc_transform([self.img2.shape[1]*self.scale_ratio, self.img2.shape[0]*self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
+        M = calc_transform([self.img2.shape[1] * self.scale_ratio, self.img2.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
         T = H @ self.M_anchors @ M
         return T
-    
+
     def __str__(self):
         T = self.relative_transform()
-        return f"{self.img1_path}, {self.img2_path}, {T.flatten().tolist()}"
+        return f"{self.img1_path}, {self.img2_path}, {','.join([str(x) for x in T.flatten().tolist()])}"
        
 class DebugInfo:
     def __init__(self, root, app):
@@ -281,6 +338,7 @@ class ButtonPanel:
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode)
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode)
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_switch)
+        self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid)
         self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode)
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode)
         self.help_frame = tk.Frame(self.frame)
@@ -293,7 +351,6 @@ class ButtonPanel:
         
         self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv)
         self.save_results_button = tk.Button(self.frame, text="Save Results", command=self.save_results)
-        self.next_image_button = tk.Button(self.frame, text="Next Image", command=self.next_image)
         self.image_list_frame = tk.Frame(self.frame)
         self.image_list_scrollbar = tk.Scrollbar(self.image_list_frame)
         self.image_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -302,23 +359,27 @@ class ButtonPanel:
         self.image_listbox.bind('<<ListboxSelect>>', self.select_image)
         self.image_list_scrollbar.config(command=self.image_listbox.yview)
 
-        self.alpha_slider.grid(row=0, column=0, sticky='ew')
-        self.rotation_slider.grid(row=1, column=0, sticky='ew')
-        self.scale_slider.grid(row=2, column=0, sticky='ew')
-        self.homography_button.grid(row=3, column=0, sticky='ew')
-        self.homography_reset_button.grid(row=4, column=0, sticky='ew')
-        self.homography_calculate_button.grid(row=5, column=0, sticky='ew')
-        self.viewport_button.grid(row=6, column=0, sticky='ew')
-        self.contrast_button.grid(row=7, column=0, sticky='ew')
-        self.switch_button.grid(row=8, column=0, sticky='ew')
-        self.debug_button.grid(row=9, column=0, sticky='ew')
-        self.help_button.grid(row=10, column=0, sticky='ew')
-        self.help_frame.grid(row=11, column=0, sticky='ew')
-        self.upload_button.grid(row=12, column=0, sticky='ew')
-        self.load_csv_button.grid(row=13, column=0, sticky='ew')
-        self.next_image_button.grid(row=14, column=0, sticky='ew')
-        self.save_results_button.grid(row=15, column=0, sticky='ew')
-        self.image_list_frame.grid(row=16, column=0, sticky='ew')
+        buttons = [
+            self.alpha_slider,
+            self.rotation_slider,
+            self.scale_slider,
+            self.homography_button,
+            self.homography_reset_button,
+            self.homography_calculate_button,
+            self.viewport_button,
+            self.contrast_button,
+            self.switch_button,
+            self.grid_button,
+            self.debug_button,
+            self.help_button,
+            self.help_frame,
+            self.upload_button,
+            self.load_csv_button,
+            self.save_results_button,
+            self.image_list_frame
+        ]
+        for i, b in enumerate(buttons):
+            b.grid(row=i, column=0, sticky='ew')
 
         self.frame.grid_columnconfigure(0, weight=1)
         
@@ -331,13 +392,16 @@ class ButtonPanel:
         new_pairs = []
         with open(file_path, 'r') as file:
             for line in file:
-                line_parsed = line.strip().split(',')[:2]  # Assuming 2 columns in CSV
-                if len(line_parsed) != 2:
+                line_parsed = line.strip().split(',')
+                if len(line_parsed) != 2 and len(line_parsed) != 11:
                     self.app.display_message(f"ERROR: {line} is not a valid image pair")
                     continue
-                image_path1, image_path2 = line_parsed
+                image_path1, image_path2 = line_parsed[0], line_parsed[1]
                 image_path1, image_path2 = image_path1.replace(' ',''), image_path2.replace(' ','')
-                new_pair = ImagePair(image_path1, image_path2)
+                H = np.eye(3)
+                if len(line_parsed) == 11:
+                    H = np.array([float(line_parsed[i]) for i in range(2,11)]).reshape(3,3)
+                new_pair = ImagePair(image_path1, image_path2, H)
                 if new_pair.valid:
                     new_pairs.append(new_pair)
                 else:
@@ -351,8 +415,9 @@ class ButtonPanel:
         else:
             self.app.display_message("ERROR: No valid image pairs found in CSV")
         self.current_index = -1
-        if not self.app.images.valid and len(self.image_pairs) > 0:
-            self.next_image()
+        #if not self.app.images.valid and len(self.image_pairs) > 0:
+        self.next_image()
+        self.app.sync_sliders()
 
     def save_results(self):
         self.app.clear_messages()
@@ -362,7 +427,7 @@ class ButtonPanel:
             return
         output_file = f"{output_folder}/results.csv"
         self.app.display_message(f"Saved results to {output_file}")
-        with open(output_file, 'a') as file:
+        with open(output_file, 'w') as file:
             if len(self.image_pairs) == 0:
                 file.write(f"{self.app.images}\n")
                 image = self.app.images.render(self.app)
@@ -378,12 +443,18 @@ class ButtonPanel:
     def step_image(self, sign):
         if len(self.image_pairs) == 0:
             return
+        prev = self.app.images
         self.current_index = (self.current_index + sign) % len(self.image_pairs)
         self.image_listbox.selection_clear(0, tk.END)
         self.image_listbox.selection_set(self.current_index)
         self.image_listbox.see(self.current_index)
         self.app.images = self.image_pairs[self.current_index]
+        cur = self.app.images
+        if cur.is_identity():
+            cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
+            cur.reset_anchors()
         self.app.render()
+        self.app.sync_sliders()
         
     def next_image(self):
         self.step_image(+1)
@@ -395,6 +466,7 @@ class ButtonPanel:
         self.current_index = self.image_listbox.curselection()[0]
         self.app.images = self.image_pairs[self.current_index]
         self.app.render()
+        self.app.sync_sliders()
 
 class ImageAlignerApp:
     def __init__(self, root, image_pair=None):
@@ -422,6 +494,7 @@ class ImageAlignerApp:
         self.contrast_mode = False
         self.homography_mode = False
         self.rotation_mode = False
+        self.draw_grid = False
 
         if not 'debug_info' in dir(self):
             self.debug_info = DebugInfo(root, self)
@@ -445,6 +518,8 @@ class ImageAlignerApp:
         self.root.bind('<ButtonPress-1>', self.on_mouse_press)
         self.root.bind('<B1-Motion>', self.on_mouse_drag)
         self.root.bind('<ButtonRelease-1>', self.on_mouse_release)
+        self.root.bind('<Control-z>', self.undo)
+        self.root.bind('<Control-y>', self.redo)
         self.root.bind("<Escape>", self.exit)
     
     def upload_images(self):
@@ -463,8 +538,13 @@ class ImageAlignerApp:
     def M_global(self):
         return calc_transform(window_size, self.global_scale, 0, self.global_x_offset, self.global_y_offset)
     
-    def render(self):
+    def render(self, update_state=True):
+        if not self.dragging and update_state:
+            self.images.save_state()
         rendered_image = self.images.render(self)
+        if self.draw_grid:
+            rendered_image = draw_grid(rendered_image,100)
+
         img_pil = Image.fromarray(rendered_image)
         self.tk_image = ImageTk.PhotoImage(img_pil)
         self.canvas.delete('all')
@@ -496,6 +576,10 @@ class ImageAlignerApp:
         self.images.scale = np.clip(float(val),0.1,10)
         self.button_panel.scale_slider.set(np.log10(self.images.scale))
         self.render()
+    
+    def sync_sliders(self):
+        self.button_panel.rotation_slider.set(self.images.rotation)
+        self.button_panel.scale_slider.set(np.log10(self.images.scale))
         
     def toggle_help_mode(self):
         self.help_mode = not self.help_mode
@@ -536,13 +620,28 @@ class ImageAlignerApp:
         self.button_panel.switch_button.config(text="Switch Images:  ON" if self.toggle else "Switch Images: OFF", bg=('grey' if self.toggle else 'white'))
         self.render()
 
+    def toggle_grid(self):
+        self.draw_grid = not self.draw_grid
+        self.button_panel.grid_button.config(text="Show Grid:  ON" if self.toggle else "Show Grid: OFF", bg=('grey' if self.draw_grid else 'white'))
+        self.render()
+
     def reset_homography(self):
-        self.images.reset_anchors()
         self.images.M_anchors = np.eye(3)
+        self.images.reset_anchors()
+        self.render()
+
+    def reset(self):
+        self.update_scale(1.0)
+        self.update_rotation(0)
+        self.images.x_offset = 0
+        self.images.y_offset = 0
+        self.images.M_anchors = np.eye(3)
+        self.images.reset_anchors()
         self.render()
         
     def run_matching(self):
         ret = self.images.run_matching()
+        self.sync_sliders()
         if not ret:
             self.display_message('ERROR: Could not calculate homography')
         self.render()
@@ -557,6 +656,14 @@ class ImageAlignerApp:
         self.button_panel.debug_button.config(text="Debug Mode:  ON" if self.debug_mode else "Debug Mode: OFF", bg=('grey' if self.debug_mode else 'white'))
         self.render()
     
+    def undo(self, event):
+        self.images.undo()
+        self.render(False)
+
+    def redo(self, event):
+        self.images.redo()
+        self.render(False)
+    
     def on_key_press(self, event):
         if event.char == 'r':
             self.update_rotation(self.images.rotation + 90)
@@ -570,10 +677,14 @@ class ImageAlignerApp:
             self.toggle_contrast_mode()
         elif event.char == 't':
             self.toggle_switch()
-        elif event.keysym == 'Control_L' or event.keysym == 'Control_R':
+        elif event.char == 'h':
             self.toggle_homography_mode()
         elif event.char == 'o':
             self.reset_homography()
+        elif event.char == 'q':
+            self.reset()
+        elif event.char == 'g':
+            self.toggle_grid()
         elif event.char == 'a':
             self.run_matching()
         elif event.char == ' ':
@@ -667,8 +778,8 @@ class ImageAlignerApp:
             self.images.M_anchors = calc_homography(self.images.anchors) @ self.images.M_anchors
             for anchor in self.images.anchors:
                 anchor.reset()
-            self.render()
-            return
+        self.render()
+        return
         
     def move_anchors(self):
         self.images.M_anchors = calc_homography(self.images.anchors) @ self.images.M_anchors
