@@ -164,8 +164,11 @@ class ImagePair:
 
     def save_state(self):
         current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors)
-        if len(self.state_stack) > 0 and self.state_stack[self.current_state_index] == current_state:
-            return  # Avoid saving duplicate states
+        if len(self.state_stack) > 0:
+            previous_state = self.state_stack[self.current_state_index]
+            identical = (np.linalg.norm(np.array(previous_state[:4]) - np.array(current_state[:4]) ) < 1e-3) and (np.linalg.norm(previous_state[5]-current_state[5]) < 1e-3)
+            if identical:
+                return
         self.state_stack = self.state_stack[:self.current_state_index + 1]
         self.state_stack.append(current_state)
         self.current_state_index += 1
