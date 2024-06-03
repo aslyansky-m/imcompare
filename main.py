@@ -632,7 +632,7 @@ class ImageAlignerApp:
 
     def toggle_grid(self):
         self.draw_grid = not self.draw_grid
-        self.button_panel.grid_button.config(text="Show Grid:  ON" if self.toggle else "Show Grid: OFF", bg=('grey' if self.draw_grid else 'white'))
+        self.button_panel.grid_button.config(text="Show Grid:  ON" if self.draw_grid else "Show Grid: OFF", bg=('grey' if self.draw_grid else 'white'))
         self.render()
 
     def reset_homography(self):
