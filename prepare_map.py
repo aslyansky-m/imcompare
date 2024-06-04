@@ -84,22 +84,13 @@ def transform_geotiff(input_tif, output_folder, filename=None, grayscale=False, 
         subprocess.Popen(exe, shell=True).wait()
         
 if __name__ == "__main__":
-    maps = ["carmel", "fluky", "gaza_new", "gvaram_new", "hrscd", "hrscd_sim", "lachish", "shivta"]
-    for map_name in maps:
-        input_tiff = f'/home/maxim/Documents/data/IBN/dataset/maps/{map_name}/{map_name}_tiled.tif'
-        output_folder = f"/home/maxim/Documents/data/IBN/dataset/maps_new/{map_name}/"
-        filename = 'map'
-        grayscale_conversion = False
-        resize_factors = [2, 4, 8, 16]
-        crop_region = None #= (start_lon, end_lon, start_lat, end_lat)  # Define your crop box here
-        fix_aspect_ratio = True
+    input_tiff = 'input/hrscd.tif'
+    output_folder = 'input/hrscd/'
+    filename = 'map'
+    grayscale_conversion = False
+    resize_factors = [2, 4, 8, 16]
+    crop_region = None #= (start_lon, end_lon, start_lat, end_lat)  # Define your crop box here
+    fix_aspect_ratio = False
 
-        transform_geotiff(input_tiff, output_folder, filename, grayscale=grayscale_conversion, resize_factors=resize_factors, crop_box=crop_region, fix_aspect_ratio=fix_aspect_ratio)
-        
-        try:
-            src = f'/home/maxim/Documents/data/IBN/dataset/maps/{map_name}/{map_name}_dtm.tif'
-            dst = f'/home/maxim/Documents/data/IBN/dataset/maps_new/{map_name}/dtm.tif'
-            shutil.copyfile(src, dst)
-        except:
-            pass
+    transform_geotiff(input_tiff, output_folder, filename, grayscale=grayscale_conversion, resize_factors=resize_factors, crop_box=crop_region, fix_aspect_ratio=fix_aspect_ratio)
 

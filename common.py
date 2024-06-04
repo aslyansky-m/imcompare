@@ -105,6 +105,12 @@ def project_cam2world(points, K, Ki, angle, position, altitude):
 	coord = np.hstack([coord, np.zeros((coord.shape[0], 1))])
 	return coord
 
+def rotation_matrix(theta):
+	R = np.array([[math.cos(theta), -math.sin(theta), 0],
+					[math.sin(theta), math.cos(theta), 0],
+					[0, 0, 1]
+					])
+	return R
 
 def translation_matrix(t):
 	T = np.eye(3)
@@ -236,10 +242,11 @@ def warp_map_tiled(map_page, tform, output_shape):
 	T = np.eye(3)
 	T[:2, 2] += topleft
 	tform_fixed = np.matmul(tform, T)
+ 
+	if min_x == max_x or min_y == max_y:
+		return None
 	
 	crop = get_crop(map_page, min_y, min_x, max_y-min_y, max_x-min_x)
-	# scale = (max_y-min_y)/output_shape[0]
-	# print(scale)
 	
 	im_out = cv2.warpPerspective(crop, tform_fixed, output_shape)
 	
@@ -333,7 +340,7 @@ class PyramidMap:
         self.map_pages = [TiffFile(map_file).pages[0] for map_file in self.map_files]
         self.map_object = rasterio.open(self.map_file)
         self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
-        self.map_shape = [self.map_pages[0].imagelength,self.map_pages[0].imagewidth]
+        self.shape = [self.map_pages[0].imagelength,self.map_pages[0].imagewidth]
         self.dataset_length = 2*int(np.prod(self.map_boundaries)/effective_altitude**2)
         self.map_initialized = True
         self.scales = [None]*len(self.map_pages)
@@ -341,7 +348,7 @@ class PyramidMap:
             self.scales[n] = self.map_pages[0].imagelength / self.map_pages[n].imagelength
     
     def warp_map(self, tform, output_shape):
-        [H, W] = self.map_shape
+        [H, W] = self.shape
         (w, h) = output_shape
         corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]])
         new_corners = apply_tform(np.linalg.inv(tform), corners)

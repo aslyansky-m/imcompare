@@ -56,21 +56,22 @@ def sift_matching_with_homography(img1, img2):
 
 
 
-img1_path, img2_path = "input/im1.jpeg", "input/im3.jpeg"
+img1_path, img2_path = "output/simulated/image_00.jpg", "output/simulated/image_01.jpg"
 img1 = cv2.cvtColor(cv2.imread(img1_path), cv2.COLOR_BGR2RGB)
 img2 = cv2.cvtColor(cv2.imread(img2_path), cv2.COLOR_BGR2RGB)
 
 H = sift_matching_with_homography(img1, img2)
-translation, rotation, scale = decompose_homography(H, img2.shape)
-H2 = calc_transform((img2.shape[1],img2.shape[0]), scale, rotation, translation[0], translation[1])
+translation, rotation, scale, H2 = decompose_homography(H, img2.shape)
+# H2 = calc_transform((img2.shape[1],img2.shape[0]), scale, rotation, translation[0], translation[1])
 print(H)
 print(H2)
 print(H-H2)
 img3 = cv2.warpPerspective(img1,H,(img2.shape[1],img2.shape[0]))
+img3 = np.stack([img2.mean(axis=-1), img3.mean(axis=-1), img2.mean(axis=-1)], axis=-1)/255.0
 img4 = cv2.warpPerspective(img1,H2,(img2.shape[1],img2.shape[0]))
 
 
-fig, ax = plt.subplots(4,1)
+fig, ax = plt.subplots(1,4)
 ax[0].imshow(img1)
 ax[1].imshow(img2)
 ax[2].imshow(img3)

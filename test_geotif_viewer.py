@@ -183,7 +183,7 @@ class ImageManipulator:
 
 def main():
     root = tk.Tk()
-    ImageManipulator(root, "hrscd/map.tif")
+    ImageManipulator(root, "input/hrscd/map.tif")
     root.mainloop()
 
 if __name__ == "__main__":
