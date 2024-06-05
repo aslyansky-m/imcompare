@@ -77,7 +77,7 @@ class ImageManipulator:
 
         self.img = PyramidMap(self.image_paths)
 
-        self.scale_ratio = min(self.window_dimensions[0] / self.img.map_shape[1], self.window_dimensions[1] / self.img.map_shape[0])
+        self.scale_ratio = min(self.window_dimensions[0] / self.img.shape[1], self.window_dimensions[1] / self.img.shape[0])
         self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
 
 
@@ -92,7 +92,7 @@ class ImageManipulator:
             M_combined_3x3 = np.dot(M2_3x3, M1_3x3)
             return M_combined_3x3
 
-        M = calc_transform(np.array(self.img.map_shape), self.scale_factor, self.rotation, self.x_offset/self.scale_ratio, self.y_offset/self.scale_ratio)
+        M = calc_transform(np.array(self.img.shape), self.scale_factor, self.rotation, self.x_offset/self.scale_ratio, self.y_offset/self.scale_ratio)
 
         # t1 = time.time()
         # img_cropped = cv2.warpPerspective(self.img1, M  @ self.M_original, self.window_dimensions)
@@ -183,7 +183,7 @@ class ImageManipulator:
 
 def main():
     root = tk.Tk()
-    ImageManipulator(root, "input/hrscd/map.tif")
+    ImageManipulator(root, "output/hrscd/map.tif")
     root.mainloop()
 
 if __name__ == "__main__":

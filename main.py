@@ -9,17 +9,18 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 import pandas as pd
 import time
+from pathlib import Path
 
-# TODO
-# delete
-# ctrl-s
-# zoom around cursor
+# TODO: fix zoom around center
+# TODO: fix centering to FOV
+# TODO: update keys and help
 
-from common import PyramidMap
+
+from common import *
 
 screen_size = (1080, 700)
 window_size = screen_size
-SCREEN_FACTOR = 0.7
+SCREEN_FACTOR = 0.9
 
 class Anchor:
     def __init__(self, x, y, original=False):
@@ -47,7 +48,6 @@ class Anchor:
             canvas.create_oval(pos0_t[0] - r0, pos0_t[1] - r0, pos0_t[0] + r0, pos0_t[1] + r0, fill='yellow')
             color = 'red' if self.moved else 'blue'
             canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill=color)
-
 
 
 def sift_matching_with_homography(img1, img2):
@@ -164,10 +164,17 @@ class ImageObject:
     
     def get_image(self):
         if self.image is None:
-            self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
+            if not os.path.exists(self.image_path):
+                return None
+            try:
+                self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
+            except:
+                return None
         return self.image
 
     def save_state(self):
+        if self.image is None:
+            return
         current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors)
         if len(self.state_stack) > 0:
             previous_state = self.state_stack[self.current_state_index]
@@ -258,7 +265,7 @@ class ImageObject:
     def relative_transform(self):
         M = calc_transform([self.image.shape[1] * self.scale_ratio, self.image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
-        T = H @ self.M_anchors @ M
+        T = H @ self.M_anchors @ M @ self.M_original
         return T
 
     def __str__(self):
@@ -283,12 +290,10 @@ class DebugInfo:
             self.debug_frame.pack(side="left", fill="y")
             tk.Label(self.debug_frame, text="Debug Information", font=('Helvetica', 16, 'bold'), bg='grey').pack(side="top", pady=10)
 
-        # Remove existing labels
         for label in self.label_widgets:
             label.destroy()
         self.label_widgets.clear()
-        
-        # Display all global variables
+    
         app_vars = vars(self.app)
         image_vars = vars(self.app.image)
         for var_name, var_value in {**app_vars, **image_vars}.items():
@@ -348,6 +353,7 @@ class ButtonPanel:
         self.create_widgets()
         self.current_index = 0
         self.images = []
+        self.output_folder = None
 
     def create_widgets(self):
         self.alpha_slider = tk.Scale(self.frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label="Alpha Blending", command=self.app.update_alpha,bg='white')
@@ -364,7 +370,7 @@ class ButtonPanel:
         self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching,bg='white')
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
-        self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_switch,bg='white')
+        self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
         self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
         self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
@@ -377,6 +383,7 @@ class ButtonPanel:
         
         self.upload_button = tk.Button(self.frame, text="Upload Image", command=self.app.upload_image,bg='white')
         self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv,bg='white')
+        self.save_image_button = tk.Button(self.frame, text="Save Image", command=self.on_save_image,bg='white')
         self.save_results_button = tk.Button(self.frame, text="Save Results", command=self.save_results,bg='white')
         self.image_list_frame = tk.Frame(self.frame,bg='white')
         self.image_list_scrollbar = tk.Scrollbar(self.image_list_frame)
@@ -402,6 +409,7 @@ class ButtonPanel:
             self.help_frame,
             self.upload_button,
             self.load_csv_button,
+            self.save_image_button,
             self.save_results_button,
             self.image_list_frame
         ]
@@ -410,14 +418,28 @@ class ButtonPanel:
 
         self.frame.grid_columnconfigure(0, weight=1)
         
-    def load_csv(self):
+    def load_csv(self, file_path=None):
         self.app.clear_messages()
-        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
-        # TODO: read map as well
+        if not file_path:
+            file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
         if not os.path.exists(file_path):
             self.app.display_message(f"ERROR: {file_path} does not exist")
             return
         df = pd.read_csv(file_path)
+        if "map_path" in df:
+            count = df["map_path"].nunique()
+            map_path = df["map_path"][0]
+            if count > 1:
+                self.app.display_message(f"WARNING: Multiple maps found in CSV, slecting: {map_path}")
+                df = df[df["map_path"] == map_path]
+            if not os.path.exists(map_path):
+                self.app.display_message(f"ERROR: {map_path} does not exist")
+                return
+            self.app.map = PyramidMap(map_path)
+            self.app.display_message(f"Loaded map from: \n{map_path}")
+        elif not self.app.map:
+            self.app.display_message("ERROR: No map loaded")
+            return
         new_objects = []
         for index, row in df.iterrows():
             image_path = row["images"]
@@ -433,24 +455,24 @@ class ButtonPanel:
                 self.app.display_message(f"ERROR: {new_object.error_message}")
         if len(new_objects) > 0:
             self.image_listbox.delete(0,tk.END)
-            self.app.display_message(f"Loaded {len(new_objects)} image(s) from {file_path}")
+            self.app.display_message(f"Loaded {len(new_objects)} image(s) from: \n{file_path}")
             for new_object in new_objects:
                 self.image_listbox.insert(tk.END, new_object.image_path.split('/')[-1])
             self.images = new_objects
         else:
-            self.app.display_message("ERROR: No valid image pairs found in CSV")
+            self.app.display_message(f"ERROR: No valid image pairs found in CSV: \n{file_path}")
         self.app.image = None
         self.select_image(0)
         self.app.sync_sliders()
 
     def save_results(self):
         self.app.clear_messages()
-        output_folder = filedialog.askdirectory(title='Select output folder...')
-        if not output_folder:
+        if not self.output_folder:
+            self.output_folder = filedialog.askdirectory(title='Select output folder...')
+        if not self.output_folder:
             self.app.display_message("ERROR: Please select an output folder")
             return
-        output_file = f"{output_folder}/results.csv"
-        self.app.display_message(f"Saved results to {output_file}")
+        output_file = f"{self.output_folder}/results.csv"
         images_to_save = [self.app.image]
         if len(self.images) > 0:
             images_to_save = self.images
@@ -458,14 +480,43 @@ class ButtonPanel:
         data_to_write = []
 
         for i, image_object in enumerate(images_to_save):
-            for i, image_pair in enumerate(self.images):
-                data_to_write.append(dict(images=image_pair.image_path, homography=image_pair.relative_transform().flatten(),map_path=self.app.map.map_file))
-                #TODO
-                # image = image_pair.render(self.app.M_global())
-                # cv2.imwrite(f"{output_folder}/result_{i+1}.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            data_to_write.append(dict(images=image_object.image_path, homography=image_object.relative_transform().flatten(),map_path=self.app.map.map_file))
         
         pd.DataFrame(data_to_write).to_csv(output_file, index=False)
-                    
+        self.app.display_message(f"Saved results to {output_file}")
+        
+    def on_save_image(self, event):
+        self.app.clear_messages()
+        if not self.output_folder:
+            self.output_folder = filedialog.askdirectory(title='Select output folder...')
+        if not self.output_folder:
+            self.app.display_message("ERROR: Please select an output folder")
+            return
+        
+        selected_image = self.app.image
+        output_file = f"{self.output_folder}/{Path(selected_image.image_path).stem}.tif"
+        H_tot = np.linalg.inv(selected_image.relative_transform())
+        query_aligned, bbox_gps = align_image(selected_image.get_image(), self.app.map, H_tot, target_size = max(selected_image.get_image().shape))
+        dump_geotif(query_aligned, bbox_gps, output_file)
+        
+        self.app.display_message(f"Saved results to {output_file}")
+        
+    def on_delete(self, event):
+        
+        if self.app.homography_mode:
+            return
+        
+        if len(self.images) == 0:
+            return
+        
+        self.app.clear_messages()
+        self.app.display_message(f"Deleted image pair: {self.images[self.current_index].image_path.split('/')[-1]}")
+        del self.images[self.current_index]
+        
+        if len(self.images) == 0:
+            return
+        self.image_listbox.delete(self.current_index)
+        self.select_image(self.current_index)
             
     def select_image(self, new_index):
         if len(self.images) == 0:
@@ -479,7 +530,7 @@ class ButtonPanel:
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if prev is not None and cur.is_identity():
+        if prev is not None and cur.is_identity() and not prev.is_identity():
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
@@ -509,11 +560,13 @@ class ImageAlignerApp:
             self.root = root
         
         if image_object is None:
-            image_object = ImageObject("", "")
+            image_object = ImageObject("")
 
-        self.image = ImageObject("output/simulated/image_00.jpg")
-        self.map = PyramidMap("output/hrscd/map.tif")
+        self.image = image_object
+        self.map = map_object
         self.alpha = 0.75
+        self.last_map = None
+        self.last_state = None
         
         self.global_x_offset = 0
         self.global_y_offset = 0
@@ -549,14 +602,16 @@ class ImageAlignerApp:
         self.root.bind('<KeyRelease>', self.on_key_release)
         self.root.bind('<MouseWheel>', self.on_mouse_wheel)
         self.root.bind("<Button-2>", self.on_middle_click)
-        self.root.bind("<Button-3>", self.on_right_click)
+        self.root.bind("<Button-3>", self.toggle_images)
         self.root.bind("<Button-4>", self.on_mouse_wheel)
         self.root.bind("<Button-5>", self.on_mouse_wheel)
         self.root.bind('<ButtonPress-1>', self.on_mouse_press)
         self.root.bind('<B1-Motion>', self.on_mouse_drag)
         self.root.bind('<ButtonRelease-1>', self.on_mouse_release)
         self.root.bind('<Control-z>', self.undo)
-        self.root.bind('<Control-y>', self.redo)
+        self.root.bind('<Control-Z>', self.redo)
+        self.root.bind('<Control-s>', self.button_panel.on_save_image)
+        self.root.bind('<Delete>', self.button_panel.on_delete)
         self.root.bind("<Escape>", self.exit)
         self.root.bind("<Motion>", self.on_mouse_position)
     
@@ -583,7 +638,12 @@ class ImageAlignerApp:
         if im2 is None:
             return np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
         
-        im1 = self.map.warp_map(M_global, window_size)
+        M_global = self.M_global()
+        if self.last_map is None or not (M_global==self.last_state).all():
+            self.last_map = self.map.warp_map(M_global, window_size)
+            self.last_state = M_global
+        
+        im1 = self.last_map.copy()
         
         if im1 is None:
             im1 = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
@@ -689,7 +749,7 @@ class ImageAlignerApp:
         self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF", bg=('grey' if self.contrast_mode else 'white'))
         self.render()
 
-    def toggle_switch(self):
+    def toggle_images(self, _ = None):
         self.toggle = not self.toggle
         self.button_panel.switch_button.config(text="Switch Images:  ON" if self.toggle else "Switch Images: OFF", bg=('grey' if self.toggle else 'white'))
         self.render()
@@ -725,7 +785,7 @@ class ImageAlignerApp:
         self.sync_sliders()
         self.render()
 
-    def toggle_viewport_mode(self):
+    def toggle_viewport_mode(self, _ = None):
         self.viewport_mode = not self.viewport_mode
         self.button_panel.viewport_button.config(text="Viewport Mode:  ON" if self.viewport_mode else "Viewport Mode: OFF", bg=('grey' if self.viewport_mode else 'white'))
         self.root.config(cursor=('fleur' if self.viewport_mode else 'arrow'))
@@ -769,8 +829,8 @@ class ImageAlignerApp:
             self.toggle_debug_mode()
         elif event.char == 'c':
             self.toggle_contrast_mode()
-        elif event.char == 't':
-            self.toggle_switch()
+        elif event.char == ' ':
+            self.toggle_viewport_mode()
         elif event.char == 'h':
             self.toggle_homography_mode()
         elif event.char == 'o':
@@ -781,8 +841,6 @@ class ImageAlignerApp:
             self.toggle_grid()
         elif event.char == 'a':
             self.run_matching()
-        elif event.char == ' ':
-            self.toggle_viewport_mode()
         elif event.keysym == 'Right':
             self.button_panel.next_image()
         elif event.keysym == 'Left':
@@ -800,9 +858,6 @@ class ImageAlignerApp:
     
     def on_middle_click(self, event):
         self.rotation_mode = not self.rotation_mode
-
-    def on_right_click(self, event):
-        self.toggle_switch()
 
     def on_mouse_wheel(self, event):
         if not self.check_relevancy(event):
@@ -899,15 +954,16 @@ class ImageAlignerApp:
 def main():
     root = tk.Tk()
     global window_size, screen_size
-    screen_size = (int(root.winfo_screenwidth()*SCREEN_FACTOR), int(root.winfo_screenheight()*SCREEN_FACTOR))
-    window_size = (int(screen_size[0]*0.8), screen_size[1])
+    screen_size = [int(root.winfo_screenwidth()*SCREEN_FACTOR), int(root.winfo_screenheight()*SCREEN_FACTOR)]
+    screen_size[0] = min(screen_size[0], int(screen_size[1]*1.9))
+    window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
     root.title("TagIm Aligning App")
     root.geometry(f"{screen_size[0]}x{screen_size[1]}")
     photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
     root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    # app.button_panel.load_csv()
+    app.button_panel.load_csv("input/simulated_image.csv")
 
     root.mainloop()
 

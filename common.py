@@ -1,15 +1,16 @@
 import cv2
 import numpy as np
 import math
+import os
 import pymap3d as pm
 from skimage import transform
 from tifffile import TiffFile
 import rasterio
 from scipy.ndimage import gaussian_filter1d
 from glob import glob
+from osgeo import gdal, osr
 
-
-def calc_bbox2(map_corners):
+def calc_bbox(map_corners):
 	bx0 = np.min(map_corners[:, 0])
 	bx1 = np.max(map_corners[:, 0])
 	by0 = np.min(map_corners[:, 1])
@@ -258,7 +259,7 @@ def calc_crop(map_shape, map_corners, template_size, target_size, random=True, p
 	# calculate possible crop
 	mx = map_shape[1]
 	my = map_shape[0]
-	bx0, bx1, by0, by1 = calc_bbox2(map_corners)
+	bx0, bx1, by0, by1 = calc_bbox(map_corners)
 	template_size_map = max(bx1 - bx0, by1 - by0)
 	target_size_map = template_size_map * scale_ratio
 	sx = sy = target_size_map
@@ -301,7 +302,7 @@ def calc_crop(map_shape, map_corners, template_size, target_size, random=True, p
 
 	#perform check
 	new_corners = apply_tform(H_tot, map_corners).astype(int)
-	bx0, bx1, by0, by1 = calc_bbox2(new_corners)
+	bx0, bx1, by0, by1 = calc_bbox(new_corners)
 
 	fx0 = (bx0 + bx1) / 2 - template_size / 2
 	fy0 = (by0 + by1) / 2 - template_size / 2
@@ -379,3 +380,81 @@ class PyramidMap:
 
     def gps2pix(self, gps):
         return np.array(self.map_object.index(gps[1], gps[0])[::-1])
+
+def align_image(image, map_object, H_tot, target_size = 504):
+    
+    (h,w) = image.shape[:2]
+    corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).astype(np.float32)
+    map_corners = apply_tform(np.linalg.inv(H_tot), corners)
+
+    bx0, bx1, by0, by1 = calc_bbox(map_corners)
+
+    bbox_pix = np.array([[bx0,by0], [bx1,  by1]])
+
+    ds_ratio = target_size / abs(bx1 - bx0)
+    S = np.diag([ds_ratio, ds_ratio, 1])
+
+    output_size = [target_size,abs(int(target_size*(by1 - by0)/(bx1 - bx0)))]
+
+    start = np.array([bx0, by0])
+    T = translation_matrix(-start)
+    H_crop = np.matmul(S, T)
+
+    crop = map_object.warp_map(H_crop, output_size)
+
+    warped_corners = apply_tform(H_crop, map_corners).astype(int)
+    bx0, bx1, by0, by1 = calc_bbox(warped_corners)
+    loc_guess = np.array([(bx0 + bx1) / 2, (by0 + by1) / 2]) - np.array(output_size) / 2
+
+    # calculate second image warp
+    new_corners2 = warped_corners - np.array(loc_guess)[np.newaxis]
+    H_align = estimate_transform(corners, new_corners2, 3)
+    query_aligned = cv2.warpPerspective(image, H_align, output_size)
+    
+    bbox_gps = []
+    for corner in bbox_pix:
+        gps_corner = pix2gps(map_object.map_object,corner)
+        bbox_gps.append(gps_corner)
+    bbox_gps = np.array(bbox_gps)
+    
+    return query_aligned, bbox_gps
+
+def getGeoTransform(extent, nx, ny):
+    resx = (extent[2] - extent[0]) / ny
+    resy = (extent[3] - extent[1]) / nx
+    return [extent[1], resy, 0, extent[0] , 0, resx]
+
+def dump_geotif(query_aligned, bbox_gps, output_file):
+    
+    extent = bbox_gps.flatten()
+    driver = gdal.GetDriverByName('GTiff')
+    
+    (im_h, im_w, _) = query_aligned.shape
+    data_type = gdal.GDT_Byte
+    
+    #options = ['COMPRESS=JPEG', 'JPEG_QUALITY=80', 'TILED=YES']
+    grid_data = driver.Create('grid_data', im_w, im_h, 4, data_type, options=["ALPHA=YES"])
+    mask = ((np.sum(query_aligned, axis=2) > 0)*255).astype(np.uint8)
+    
+    colors = [
+        gdal.GCI_RedBand,
+        gdal.GCI_GreenBand,
+        gdal.GCI_BlueBand,
+    ]
+    for n in range(3):
+        grid_data.GetRasterBand(n+1).WriteArray(query_aligned[:,:,n])
+        grid_data.GetRasterBand(n+1).SetRasterColorInterpretation(colors[n])
+    grid_data.GetRasterBand(4).WriteArray(mask)
+    grid_data.GetRasterBand(4).SetRasterColorInterpretation(gdal.GCI_AlphaBand)
+
+    srs = osr.SpatialReference()
+    srs.ImportFromProj4('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')
+    
+    grid_data.SetProjection(srs.ExportToWkt())
+    grid_data.SetGeoTransform(getGeoTransform(extent, im_w, im_h))
+    
+    driver.CreateCopy(output_file, grid_data, 0)  
+    
+    driver = None
+    grid_data = None
+    os.remove('grid_data')
