@@ -373,3 +373,9 @@ class PyramidMap:
         im_out = warp_map_tiled(self.map_pages[cur_map], H_fixed, output_shape)
         
         return im_out
+    
+    def pix2gps(self, xy):
+        return np.array(self.map_object.xy(xy[1], xy[0])[::-1])
+
+    def gps2pix(self, gps):
+        return np.array(self.map_object.index(gps[1], gps[0])[::-1])

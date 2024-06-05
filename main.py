@@ -8,6 +8,12 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
 import pandas as pd
+import time
+
+# TODO
+# delete
+# ctrl-s
+# zoom around cursor
 
 from common import PyramidMap
 
@@ -211,23 +217,15 @@ class ImageObject:
             self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
     
     def initialize_from_homography(self, H):
-        translation, rotation, scale, H2 = decompose_homography(H, self.image.shape, self.scale_ratio)
+        translation, rotation, scale, H_residual = decompose_homography(H, self.image.shape, self.scale_ratio)
 
         self.scale = scale
         self.rotation = rotation
         self.x_offset = translation[0]
         self.y_offset = translation[1]
-        self.M_anchors = H2
+        self.M_anchors = H_residual
         self.reset_anchors()
         return 
-
-    # def run_matching(self):
-    #     H = sift_matching_with_homography(self.image, self.img1)
-    #     if H is None:
-    #         return False
-        
-    #     self.initialize_from_homography(self.M_original @ H @ np.linalg.inv(self.M_original))
-    #     return True
 
     def render(self, M_global):
         if not self.valid:
@@ -315,16 +313,32 @@ class InfoPanel:
         self.create_widgets()
 
     def create_widgets(self):
-        self.message_box = tk.Text(self.frame, height=1, width=30, wrap="word",bg='white')
-        self.message_box.pack(side="top", padx=2, pady=2)
-        self.message_box.insert(tk.END, "")
-        self.message_box.config(state=tk.DISABLED)
+        self.position_box = tk.Text(self.frame, height=1, width=40,bg='white')
+        self.position_box.pack(side="left", padx=2, pady=2)
+        self.scale_box = tk.Text(self.frame, height=1, width=30,bg='white')
+        self.scale_box.pack(side="left", padx=2, pady=2)
+        self.fps_box = tk.Text(self.frame, height=1, width=30,bg='white')
+        self.fps_box.pack(side="left", padx=2, pady=2)
         
-        
-    def update_message(self, message):
-        #TODO
-        pass
+        self.update_position([0,0])
+        self.update_scale(1.0)
+        self.update_fps(0) 
 
+    def update_position(self, position):
+        self.position_box.delete('1.0', tk.END)
+        self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.5f}°, {position[1]:.5f}°]")
+        self.position_box.config(state=tk.NORMAL)
+        
+    def update_scale(self, scale):
+        self.scale_box.delete('1.0', tk.END)
+        self.scale_box.insert(tk.END, f"Scale: [1:{1/scale:.2f}]")
+        self.position_box.config(state=tk.NORMAL)
+    
+    def update_fps(self, fps):
+        self.fps_box.delete('1.0', tk.END)
+        self.fps_box.insert(tk.END, f"FPS: {fps:.2f}")
+        self.position_box.config(state=tk.NORMAL)
+        
 class ButtonPanel:
     def __init__(self, root, app):
         self.root = root
@@ -369,7 +383,7 @@ class ButtonPanel:
         self.image_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.image_listbox = tk.Listbox(self.image_list_frame, yscrollcommand=self.image_list_scrollbar.set,bg='white')
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.image_listbox.bind('<<ListboxSelect>>', self.select_image)
+        self.image_listbox.bind('<<ListboxSelect>>', self.on_selection)
         self.image_list_scrollbar.config(command=self.image_listbox.yview)
 
         buttons = [
@@ -398,8 +412,8 @@ class ButtonPanel:
         
     def load_csv(self):
         self.app.clear_messages()
-        # file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
-        file_path = 'output/simulated_list.csv'
+        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        # TODO: read map as well
         if not os.path.exists(file_path):
             self.app.display_message(f"ERROR: {file_path} does not exist")
             return
@@ -408,10 +422,10 @@ class ButtonPanel:
         for index, row in df.iterrows():
             image_path = row["images"]
             H = np.eye(3)
-            if row.shape[0] > 1:
-                # TODO: check
-                H_parsed = [float(x) for x in row[1].split(' ')]
-                H = np.array([float(H_parsed[i]) for i in range(2,11)]).reshape(3,3)
+            if "homography" in row:
+                parsed_H = row["homography"].replace("[","").replace("]","").replace("\n","").split()
+                parsed_H = [float(x) for x in parsed_H if x]
+                H = np.array(parsed_H).reshape(3,3)
             new_object = ImageObject(image_path, H)
             if new_object.valid:
                 new_objects.append(new_object)
@@ -425,9 +439,8 @@ class ButtonPanel:
             self.images = new_objects
         else:
             self.app.display_message("ERROR: No valid image pairs found in CSV")
-        self.current_index = -1
-        #if not self.app.image.valid and len(self.images) > 0:
-        self.next_image()
+        self.app.image = None
+        self.select_image(0)
         self.app.sync_sliders()
 
     def save_results(self):
@@ -438,33 +451,35 @@ class ButtonPanel:
             return
         output_file = f"{output_folder}/results.csv"
         self.app.display_message(f"Saved results to {output_file}")
-        # TODO: save csv as dataframe, and images as geotif
-        with open(output_file, 'w') as file:
-            if len(self.images) == 0:
-                file.write(f"{self.app.image}\n")
-                image = self.app.image.render(self.app)
-                cv2.imwrite(f"{output_folder}/result_1.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-            else:
-                for i, image_pair in enumerate(self.images):
-                    file.write(f"{image_pair}\n")
-                    image = image_pair.render(self.app)
-                    cv2.imwrite(f"{output_folder}/result_{i+1}.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        images_to_save = [self.app.image]
+        if len(self.images) > 0:
+            images_to_save = self.images
+            
+        data_to_write = []
+
+        for i, image_object in enumerate(images_to_save):
+            for i, image_pair in enumerate(self.images):
+                data_to_write.append(dict(images=image_pair.image_path, homography=image_pair.relative_transform().flatten(),map_path=self.app.map.map_file))
+                #TODO
+                # image = image_pair.render(self.app.M_global())
+                # cv2.imwrite(f"{output_folder}/result_{i+1}.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        
+        pd.DataFrame(data_to_write).to_csv(output_file, index=False)
                     
             
-    
-    def step_image(self, sign):
+    def select_image(self, new_index):
         if len(self.images) == 0:
             self.app.clear_messages()
             self.app.display_message("ERROR: No image pairs loaded")
             return
         prev = self.app.image
-        self.current_index = (self.current_index + sign) % len(self.images)
+        self.current_index = new_index % len(self.images)
         self.image_listbox.selection_clear(0, tk.END)
         self.image_listbox.selection_set(self.current_index)
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if cur.is_identity():
+        if prev is not None and cur.is_identity():
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
@@ -478,20 +493,15 @@ class ButtonPanel:
         self.app.sync_sliders()
         
     def next_image(self):
-        self.step_image(+1)
+        self.select_image(self.current_index+1)
         
     def previous_image(self):
-        self.step_image(-1)
+        self.select_image(self.current_index-1)
 
-    def select_image(self, event):
-        if len(self.images) == 0:
-            self.app.clear_messages()
-            self.app.display_message("ERROR: No image pairs loaded")
-            return
-        self.current_index = self.image_listbox.curselection()[0]
-        self.app.image = self.images[self.current_index]
-        self.app.render()
-        self.app.sync_sliders()
+    def on_selection(self, event):
+        selected_index = self.image_listbox.curselection()[0]
+        self.select_image(selected_index)
+
 
 class ImageAlignerApp:
     def __init__(self, root, image_object=None, map_object=None):
@@ -548,6 +558,7 @@ class ImageAlignerApp:
         self.root.bind('<Control-z>', self.undo)
         self.root.bind('<Control-y>', self.redo)
         self.root.bind("<Escape>", self.exit)
+        self.root.bind("<Motion>", self.on_mouse_position)
     
     def upload_image(self):
         self.clear_messages()
@@ -591,6 +602,8 @@ class ImageAlignerApp:
         
     
     def render(self, update_state=True):
+        t = time.time()
+        
         if not self.dragging and update_state:
             self.image.save_state()
             
@@ -611,6 +624,10 @@ class ImageAlignerApp:
             M_global = self.M_global()
             for anchor in self.image.anchors:
                 anchor.plot(self.canvas, M_global)
+                
+        fps = 1/(time.time()-t)
+        self.info_panel.update_fps(fps)
+        self.info_panel.update_scale(self.global_scale)
 
         if self.debug_mode:
             self.debug_info.show_debug_info()
@@ -697,15 +714,21 @@ class ImageAlignerApp:
         self.render()
         
     def run_matching(self):
-        ret = self.image.run_matching()
-        self.sync_sliders()
-        if not ret:
+        M_global = self.M_global()
+        im1 = self.map.warp_map(M_global, window_size)
+        im2 = self.image.get_image()
+        H = sift_matching_with_homography(im2, im1)
+        if H is None:
             self.display_message('ERROR: Could not calculate homography')
+        
+        self.image.initialize_from_homography( np.linalg.inv(M_global) @ H @ np.linalg.inv(self.image.M_original))
+        self.sync_sliders()
         self.render()
 
     def toggle_viewport_mode(self):
         self.viewport_mode = not self.viewport_mode
         self.button_panel.viewport_button.config(text="Viewport Mode:  ON" if self.viewport_mode else "Viewport Mode: OFF", bg=('grey' if self.viewport_mode else 'white'))
+        self.root.config(cursor=('fleur' if self.viewport_mode else 'arrow'))
         self.render()
         
     def toggle_debug_mode(self):
@@ -720,6 +743,20 @@ class ImageAlignerApp:
     def redo(self, event):
         self.image.redo()
         self.render(False)
+        
+    def on_mouse_position(self, event):
+        relevant = self.check_relevancy(event)
+        self.root.config(cursor=('fleur' if self.viewport_mode and relevant else 'arrow'))
+        if not relevant:
+            return
+
+        pos = [event.x, event.y]
+        if self.map is None:
+            self.info_panel.update_position(pos)
+            return
+        pos = apply_homography(np.linalg.inv(self.M_global()), pos)
+        pos = self.map.pix2gps(pos)
+        self.info_panel.update_position(pos)
     
     def on_key_press(self, event):
         if event.char == 'r':
@@ -788,6 +825,7 @@ class ImageAlignerApp:
     def on_mouse_press(self, event):
         if not self.check_relevancy(event):
             return
+        
         self.dragging = True
         pt0 = [event.x, event.y]
         pt = apply_homography(np.linalg.inv(self.M_global()), pt0)
@@ -808,6 +846,7 @@ class ImageAlignerApp:
         if not self.dragging:
             return
         
+        self.last_mouse_position = (event.x, event.y)
         pt0 = [event.x, event.y]
         pt = apply_homography(np.linalg.inv(self.M_global()), pt0)
         
@@ -868,7 +907,7 @@ def main():
     root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    app.button_panel.load_csv()
+    # app.button_panel.load_csv()
 
     root.mainloop()
 
