@@ -14,6 +14,7 @@ from pathlib import Path
 # TODO: fix zoom around center
 # TODO: fix centering to FOV
 # TODO: update keys and help
+# data is here: https://ufile.io/8hcsrlo1
 
 
 from common import *
