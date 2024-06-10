@@ -8,10 +8,93 @@ import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
 
+from cpw import SmoothWarp
+# from nn_warp import SmoothWarp
+
 screen_size = (1080, 700)
 window_size = screen_size
 SCREEN_FACTOR = 0.7
 DEBUG = True
+
+
+import cv2
+import numpy as np
+
+def track_frames(rgb0, rgb1):
+    detection_params = dict(maxCorners=1000,
+                            qualityLevel=0.0001,
+                            minDistance=30,
+                            blockSize=11)
+
+    tracking_params = dict(winSize=(8, 8),
+                           maxLevel=4,
+                           criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.03),
+                           minEigThreshold=5e-5)
+
+    match_params = dict(bidirectional_thresh=2.0, nfeatures=2000, fastThreshold=15)
+
+    ransac_params = dict(ransacReprojThreshold=2,
+                         maxIters=2000,
+                         confidence=0.999,
+                         refineIters=10)
+    
+    im0 = cv2.cvtColor(rgb0, cv2.COLOR_RGB2GRAY)
+    im1 = cv2.cvtColor(rgb1, cv2.COLOR_RGB2GRAY)
+
+    p0 = cv2.goodFeaturesToTrack(im0, mask=None, **detection_params)
+
+    p1, st1, err1 = cv2.calcOpticalFlowPyrLK(im0, im1, p0, None, **tracking_params)
+    
+    if match_params['bidirectional_thresh'] > 0:
+        p2, st2, err2 = cv2.calcOpticalFlowPyrLK(im1, im0, p1, None, **tracking_params)
+        proj_err = np.linalg.norm(np.squeeze(p2 - p0), axis=1)
+        st = np.squeeze(st1 * st2) * (proj_err < match_params['bidirectional_thresh']).astype(np.uint8)
+    else:
+        st = np.squeeze(st1)
+
+    p0 = np.squeeze(p0)[st == 1]
+    p1 = np.squeeze(p1)[st == 1]
+    
+    H, mask = cv2.findHomography(p0, p1, cv2.RANSAC, 150.0)
+    mask = mask.flatten().astype(bool)
+    return p0[mask], p1[mask]
+
+    return p0, p1
+
+
+
+def match_sift_features(im1, im2, use_knn=False):
+    sift = cv2.SIFT_create(nfeatures=1000)
+    keypoints1, descriptors1 = sift.detectAndCompute(im1, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(im2, None)
+    if use_knn:
+        FLANN_INDEX_KDTREE = 1
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=50)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+        matches = flann.knnMatch(descriptors1, descriptors2, k=2)
+        good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
+    else:
+        bf = cv2.BFMatcher()
+        matches1 = bf.knnMatch(descriptors1, descriptors2, 2)
+        matches2 = bf.knnMatch(descriptors2, descriptors1, 2)
+
+        # Apply ratio test and cross-checking
+        good_matches = []
+        for m, n in matches1:
+            if m.distance < 0.75 * n.distance:
+                for n_match in matches2[m.trainIdx]:
+                    if n_match.trainIdx == m.queryIdx:
+                        good_matches.append(m)
+
+    if len(good_matches) > 10:
+        src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 2)
+        dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 2)
+        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 50.0)
+        mask = mask.flatten().astype(bool)
+        return src_pts[mask], dst_pts[mask]
+    else:
+        return None, None
 
 class Anchor:
     def __init__(self, x, y, original=False):
@@ -28,16 +111,22 @@ class Anchor:
         self.moved = False
         self.pos0 = self.pos
         
-    def plot(self, canvas, M_global):
+    def plot(self, canvas, M_global, last=False):
+        if self.original:
+            last = False
         r = 4
         pos_t = apply_homography(M_global, self.pos).astype(int)
         pos0_t = apply_homography(M_global, self.pos0).astype(int)
         if self.original:
             canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill='green')
         else:
+            canvas.create_line(pos0_t[0], pos0_t[1], pos_t[0], pos_t[1], fill='green', width=3)
             r0 = 3
             canvas.create_oval(pos0_t[0] - r0, pos0_t[1] - r0, pos0_t[0] + r0, pos0_t[1] + r0, fill='yellow')
             color = 'red' if self.moved else 'blue'
+            if last:
+                color = 'violet'
+                r = 5
             canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill=color)
 
 
@@ -156,8 +245,8 @@ class ImagePair:
             self.valid = False
             return
 
-        self.scale_ratio = min(window_size[0] / self.img1.shape[1], window_size[1] / self.img1.shape[0])
-        self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
+        self.scale_ratio = 1.0 #min(window_size[0] / self.img1.shape[1], window_size[1] / self.img1.shape[0])
+        # self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
 
         self.initialize_from_homography(M_anchors)
         self.save_state()
@@ -221,11 +310,13 @@ class ImagePair:
         return 
 
     def run_matching(self):
-        H = sift_matching_with_homography(self.img2, self.img1)
-        if H is None:
-            return False
-        
-        self.initialize_from_homography(self.M_original @ H @ np.linalg.inv(self.M_original))
+        # src, dst = match_sift_features(self.img2, self.img1)
+        src, dst = track_frames(self.img2, self.img1)
+        self.anchors = []
+        for s, d in zip(src, dst):
+            anchor = Anchor(d[0], d[1])
+            anchor.pos0 = (s[0], s[1])
+            self.anchors.append(anchor)
         return True
 
     def render(self, app):
@@ -233,11 +324,21 @@ class ImagePair:
             return np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
 
         M = calc_transform([self.img2.shape[1] * self.scale_ratio, self.img2.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
-        H = calc_homography(self.anchors)
-        M_global = app.M_global()
+        src = np.array([anchor.pos for anchor in self.anchors])
+        dst = np.array([anchor.pos0 for anchor in self.anchors])
+        
+        # H = calc_homography(self.anchors)
+        # M_global = app.M_global()
 
-        im1 = cv2.warpPerspective(self.img1, M_global @ self.M_original, window_size)
-        im2 = cv2.warpPerspective(self.img2, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
+        im1 = self.img1 #cv2.warpPerspective(self.img1, M_global @ self.M_original, window_size)
+        # im2 = cv2.warpPerspective(self.img2, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
+        
+        sw = SmoothWarp(self.img2.shape,20,20,0.0001,100)
+        sw.solve(src, dst)
+        im2 = sw.warp(self.img2)
+        
+        # sw = SmoothWarp(self.img2.shape)
+        # im2 = sw.warp(self.img2, src, dst)
 
         if app.toggle:
             im1, im2 = im2, im1
@@ -255,15 +356,16 @@ class ImagePair:
         return blend_image
 
     def push_anchor(self, pt):
-        min_dist = -1
+        min_dist = 200
         closest_anchor = None
         for anchor in self.anchors:
-            dist = (anchor.pos[0] - pt[0]) ** 2 + (anchor.pos[1] - pt[1]) ** 2
+            dist = np.sqrt((anchor.pos[0] - pt[0]) ** 2 + (anchor.pos[1] - pt[1]) ** 2)
             if min_dist < 0 or dist < min_dist:
                 min_dist = dist
                 closest_anchor = anchor
         new_anchor = Anchor(pt[0], pt[1])
-        self.anchors.remove(closest_anchor)
+        if closest_anchor:
+            self.anchors.remove(closest_anchor)
         self.anchors.append(new_anchor)
         self.save_state()
 
@@ -530,6 +632,7 @@ class ImageAlignerApp:
         self.root.bind('<ButtonRelease-1>', self.on_mouse_release)
         self.root.bind('<Control-z>', self.undo)
         self.root.bind('<Control-y>', self.redo)
+        self.root.bind("<Delete>", self.on_delete)
         self.root.bind("<Escape>", self.exit)
     
     def upload_images(self):
@@ -562,8 +665,10 @@ class ImageAlignerApp:
 
         if self.homography_mode:
             M_global = self.M_global()
-            for anchor in self.images.anchors:
+            for anchor in self.images.anchors[:-1]:
                 anchor.plot(self.canvas, M_global)
+        
+            self.images.anchors[-1].plot(self.canvas, M_global, last=True)
 
         if self.debug_mode:
             self.debug_info.show_debug_info()
@@ -673,6 +778,14 @@ class ImageAlignerApp:
     def redo(self, event):
         self.images.redo()
         self.render(False)
+        
+    def on_delete(self, event):
+        if self.homography_mode and not self.viewport_mode:
+            if len(self.images.anchors) > 0 and not self.images.anchors[-1].original:
+                self.images.anchors.pop()
+                self.render()
+        else:
+            self.reset()
     
     def on_key_press(self, event):
         if event.char == 'r':
@@ -784,10 +897,10 @@ class ImageAlignerApp:
 
     def on_mouse_release(self, event):
         self.dragging = False
-        if self.homography_mode and not self.viewport_mode:
-            self.images.M_anchors = calc_homography(self.images.anchors) @ self.images.M_anchors
-            for anchor in self.images.anchors:
-                anchor.reset()
+        # if self.homography_mode and not self.viewport_mode:
+            # self.images.M_anchors = calc_homography(self.images.anchors) @ self.images.M_anchors
+            # for anchor in self.images.anchors:
+            #     anchor.reset()
         self.render()
         return
         
@@ -820,7 +933,7 @@ def main():
     photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
     root.wm_iconphoto(False, photo)
 
-    image_pair = ImagePair("input/im1.jpeg", "input/im3.jpeg")
+    image_pair = ImagePair("input/test1.png", "input/test2.png")
     
     app = ImageAlignerApp(root, image_pair if DEBUG else None)
 
