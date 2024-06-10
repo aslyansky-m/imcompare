@@ -486,7 +486,7 @@ class ButtonPanel:
         pd.DataFrame(data_to_write).to_csv(output_file, index=False)
         self.app.display_message(f"Saved results to {output_file}")
         
-    def on_save_image(self, event):
+    def on_save_image(self, event=None):
         self.app.clear_messages()
         if not self.output_folder:
             self.output_folder = filedialog.askdirectory(title='Select output folder...')
@@ -551,6 +551,8 @@ class ButtonPanel:
         self.select_image(self.current_index-1)
 
     def on_selection(self, event):
+        if len(self.image_listbox.curselection())==0:
+            return
         selected_index = self.image_listbox.curselection()[0]
         self.select_image(selected_index)
 
