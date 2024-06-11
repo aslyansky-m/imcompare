@@ -73,8 +73,8 @@ def sift_matching_with_homography(img1, img2):
         return None
 
 def calc_transform(shape, scale, rotation, x_offset, y_offset):
-    cols, rows = shape[:2]
-    M1 = cv2.getRotationMatrix2D((cols/2, rows/2), rotation, scale)
+    w, h = shape[:2]
+    M1 = cv2.getRotationMatrix2D((w/2, h/2), rotation, scale)
     M2 = np.float32([[1, 0, x_offset], [0, 1, y_offset]])
     M1 = np.vstack([M1, [0, 0, 1]])
     M2 = np.vstack([M2, [0, 0, 1]])
@@ -150,26 +150,23 @@ class ImageObject:
             self.valid = False
             return
 
-        try:
-            self.image = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
-        except:
+        if not os.path.exists(self.image_path):
             self.error_message = f"Could not load image: {image_path}"
             self.valid = False
-            return
         
-        self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
-        self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-
-        self.initialize_from_homography(M_anchors)
-        self.save_state()
-    
+        
     def get_image(self):
         if self.image is None:
             if not os.path.exists(self.image_path):
                 return None
             try:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
-            except:
+                self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
+                self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
+                self.initialize_from_homography(self.M_anchors)
+                self.save_state()
+            except Exception as e:
+                print(e)
                 return None
         return self.image
 
@@ -368,7 +365,8 @@ class ButtonPanel:
 
         self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode,bg='white')
         self.homography_reset_button = tk.Button(self.frame, text="Reset Homography", command=self.app.reset_homography,bg='white')
-        self.homography_calculate_button = tk.Button(self.frame, text="Automatic Homography", command=self.app.run_matching,bg='white')
+        self.homography_calculate_button = tk.Button(self.frame, text="Calculate Homography", command=self.app.run_matching,bg='white')
+        self.automatic_matching_button = tk.Button(self.frame, text="Automatic Matching: OFF", command=self.app.toggle_automatic_matching,bg='white')
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
@@ -401,6 +399,7 @@ class ButtonPanel:
             self.homography_button,
             self.homography_reset_button,
             self.homography_calculate_button,
+            self.automatic_matching_button,
             self.viewport_button,
             self.contrast_button,
             self.switch_button,
@@ -531,7 +530,7 @@ class ButtonPanel:
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if prev is not None and cur.is_identity() and not prev.is_identity():
+        if self.app.automatic_matching and prev is not None and cur.is_identity():
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
@@ -570,6 +569,8 @@ class ImageAlignerApp:
         self.alpha = 0.75
         self.last_map = None
         self.last_state = None
+        self.zoom_center = None
+        self.last_global_scale = 1.0
         
         self.global_x_offset = 0
         self.global_y_offset = 0
@@ -587,6 +588,7 @@ class ImageAlignerApp:
         self.homography_mode = False
         self.rotation_mode = False
         self.draw_grid = False
+        self.automatic_matching = False
 
         if not 'debug_info' in dir(self):
             self.debug_info = DebugInfo(root, self)
@@ -629,7 +631,15 @@ class ImageAlignerApp:
         self.render()
         
     def M_global(self):
-        return calc_transform(window_size, self.global_scale, 0, self.global_x_offset, self.global_y_offset)
+        center = np.array(window_size)/2
+        if self.zoom_center is not None:
+            print(self.zoom_center, center)
+            self.global_x_offset += (self.zoom_center[0] - center[0])*(self.last_global_scale/self.global_scale - 1)
+            self.global_y_offset += (self.zoom_center[1] - center[1])*(self.last_global_scale/self.global_scale - 1)
+            self.zoom_center = None
+        self.last_global_scale = self.global_scale
+        M = calc_transform(window_size, self.global_scale, 0, self.global_x_offset, self.global_y_offset)
+        return M
     
     def blend_images(self):
         if self.map is None:
@@ -793,6 +803,10 @@ class ImageAlignerApp:
         self.button_panel.viewport_button.config(text="Viewport Mode:  ON" if self.viewport_mode else "Viewport Mode: OFF", bg=('grey' if self.viewport_mode else 'white'))
         self.root.config(cursor=('fleur' if self.viewport_mode else 'arrow'))
         self.render()
+    
+    def toggle_automatic_matching(self):
+        self.automatic_matching = not self.automatic_matching
+        self.button_panel.automatic_matching_button.config(text="Automatic Matching:  ON" if self.automatic_matching else "Automatic Matching: OFF", bg=('grey' if self.automatic_matching else 'white'))
         
     def toggle_debug_mode(self):
         self.debug_mode = not self.debug_mode
@@ -873,6 +887,7 @@ class ImageAlignerApp:
             step = -3
         if self.viewport_mode:
             self.global_scale = max(self.global_scale * (1.05 ** step), 0.1)
+            self.zoom_center = np.array([event.x, event.y])
         else:
             if self.rotation_mode:
                 self.update_rotation(self.image.rotation - step)

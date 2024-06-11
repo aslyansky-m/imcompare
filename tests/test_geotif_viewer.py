@@ -6,8 +6,8 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 import time
 
-
-
+import os
+os.sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import PyramidMap
 
 class ImageManipulator:
