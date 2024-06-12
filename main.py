@@ -1,5 +1,7 @@
 # credit goes to Maksym Aslianskyi, ChatGPT, GitHub Copilot and StackOverflow
 
+# data is here: https://ufile.io/8hcsrlo1
+
 import os
 import cv2
 import numpy as np
@@ -10,9 +12,6 @@ from PIL import Image, ImageTk
 import pandas as pd
 import time
 from pathlib import Path
-
-# data is here: https://ufile.io/8hcsrlo1
-
 from common import *
 
 screen_size = (1080, 700)
@@ -208,7 +207,6 @@ class ImageObject:
             anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
             M = calc_transform((image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio), self.scale, self.rotation, self.x_offset, self.y_offset)
             anchors_pos = [apply_homography(self.M_anchors @ M @ self.M_original, pos) for pos in anchors_pos]
-            # anchors_pos = [(np.clip(x, m, window_size[0]-m), np.clip(y, m, window_size[1]-m)) for x, y in anchors_pos]
             self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
         else:
             m = 100
