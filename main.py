@@ -11,11 +11,7 @@ import pandas as pd
 import time
 from pathlib import Path
 
-# TODO: fix zoom around center
-# TODO: fix centering to FOV
-# TODO: update keys and help
 # data is here: https://ufile.io/8hcsrlo1
-
 
 from common import *
 
@@ -461,7 +457,12 @@ class ButtonPanel:
             self.image_listbox.delete(0,tk.END)
             self.app.display_message(f"Loaded {len(new_objects)} image(s) from: \n{file_path}")
             for new_object in new_objects:
-                self.image_listbox.insert(tk.END, new_object.image_path.split('/')[-1])
+                normalized_path = os.path.normpath(new_object.image_path)
+                parts = normalized_path.split(os.sep)
+                if len(parts) > 3:
+                    parts = parts[-3:]
+                result = os.path.join(*parts)
+                self.image_listbox.insert(tk.END, result)
             self.images = new_objects
         else:
             self.app.display_message(f"ERROR: No valid image pairs found in CSV: \n{file_path}")
@@ -638,18 +639,18 @@ class ImageAlignerApp:
         center = np.array(window_size)/2
         
         if self.zoom_center is not None:
-            prev_matrix = translation_matrix(center)@scale_matrix(self.last_global_scale)@translation_matrix(-center)@translation_matrix([self.global_x_offset, self.global_y_offset])
+            prev_matrix = translation_matrix([self.global_x_offset, self.global_y_offset]) @ translation_matrix(center)@scale_matrix(self.last_global_scale)@translation_matrix(-center)
             desired_change = translation_matrix(self.zoom_center)@scale_matrix(self.global_scale/self.last_global_scale)@translation_matrix(-self.zoom_center)
             desired_matrix = desired_change@prev_matrix
             cur_scale = translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)
-            T = np.linalg.inv(cur_scale) @ desired_matrix
+            T = desired_matrix @ np.linalg.inv(cur_scale)
             self.global_x_offset = T[0, 2]
             self.global_y_offset = T[1, 2]
             self.zoom_center = None
             
         self.last_global_scale = self.global_scale
             
-        M = translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)@translation_matrix([self.global_x_offset, self.global_y_offset])
+        M = translation_matrix([self.global_x_offset, self.global_y_offset]) @ translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)
         return M
     
     def blend_images(self):
@@ -750,7 +751,7 @@ class ImageAlignerApp:
                         ('d', "Debug mode"),
                         ('c', "Contrast mode"),
                         ('t/right click', "Toggle images"),
-                        ('ctrl', "Homography mode"),
+                        ('h', "Homography mode"),
                         ('a', "Automatic homography"),
                         ('o', "Reset homography"),
                         ('space', "Change field of view"),
