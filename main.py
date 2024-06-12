@@ -427,10 +427,10 @@ class ButtonPanel:
             return
         file_dir = os.path.dirname(file_path)
         df = pd.read_csv(file_path)
-        df["images"] = df["images"].apply(lambda x: os.path.abspath(os.path.join(file_dir, x)))
+        df["images"] = df["images"].apply(lambda x: x if os.path.isabs(x) else os.path.abspath(os.path.join(file_dir, x)))
     
         if "map_path" in df:
-            df["map_path"] = df["map_path"].apply(lambda x: os.path.abspath(os.path.join(file_dir, x)))
+            df["map_path"] = df["map_path"].apply(lambda x: x if os.path.isabs(x) else os.path.abspath(os.path.join(file_dir, x)))
             count = df["map_path"].nunique()
             map_path = df["map_path"][0]
             if count > 1:
