@@ -425,8 +425,12 @@ class ButtonPanel:
         if not os.path.exists(file_path):
             self.app.display_message(f"ERROR: {file_path} does not exist")
             return
+        file_dir = os.path.dirname(file_path)
         df = pd.read_csv(file_path)
+        df["images"] = df["images"].apply(lambda x: os.path.abspath(os.path.join(file_dir, x)))
+    
         if "map_path" in df:
+            df["map_path"] = df["map_path"].apply(lambda x: os.path.abspath(os.path.join(file_dir, x)))
             count = df["map_path"].nunique()
             map_path = df["map_path"][0]
             if count > 1:
@@ -632,13 +636,20 @@ class ImageAlignerApp:
         
     def M_global(self):
         center = np.array(window_size)/2
+        
         if self.zoom_center is not None:
-            print(self.zoom_center, center)
-            self.global_x_offset += (self.zoom_center[0] - center[0])*(self.last_global_scale/self.global_scale - 1)
-            self.global_y_offset += (self.zoom_center[1] - center[1])*(self.last_global_scale/self.global_scale - 1)
+            prev_matrix = translation_matrix(center)@scale_matrix(self.last_global_scale)@translation_matrix(-center)@translation_matrix([self.global_x_offset, self.global_y_offset])
+            desired_change = translation_matrix(self.zoom_center)@scale_matrix(self.global_scale/self.last_global_scale)@translation_matrix(-self.zoom_center)
+            desired_matrix = desired_change@prev_matrix
+            cur_scale = translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)
+            T = np.linalg.inv(cur_scale) @ desired_matrix
+            self.global_x_offset = T[0, 2]
+            self.global_y_offset = T[1, 2]
             self.zoom_center = None
+            
         self.last_global_scale = self.global_scale
-        M = calc_transform(window_size, self.global_scale, 0, self.global_x_offset, self.global_y_offset)
+            
+        M = translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)@translation_matrix([self.global_x_offset, self.global_y_offset])
         return M
     
     def blend_images(self):
@@ -654,6 +665,8 @@ class ImageAlignerApp:
         M_global = self.M_global()
         if self.last_map is None or not (M_global==self.last_state).all():
             self.last_map = self.map.warp_map(M_global, window_size)
+            if self.last_map is None:
+                self.last_map = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
             self.last_state = M_global
         
         im1 = self.last_map.copy()

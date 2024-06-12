@@ -337,7 +337,8 @@ class PyramidMap:
     def __init__(self, map_file) -> None:
         effective_altitude = 500
         self.map_file = map_file
-        self.map_files = sorted(glob(map_file.split('.')[-2] + '*'))
+        pattern = os.path.splitext(map_file)[0]
+        self.map_files = sorted(glob(pattern + '*'))
         self.map_pages = [TiffFile(map_file).pages[0] for map_file in self.map_files]
         self.map_object = rasterio.open(self.map_file)
         self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
