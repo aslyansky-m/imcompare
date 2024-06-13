@@ -680,7 +680,7 @@ class ImageAlignerApp:
         if self.contrast_mode:
             im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
             im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
-            if toggle:
+            if self.toggle:
                 im1, im2 = im2, im1
             blend_image = np.stack([im1, im2, im1], axis=-1)
         else:
