@@ -682,8 +682,7 @@ class ImageAlignerApp:
             im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
             if toggle:
                 im1, im2 = im2, im1
-            channels = [im1, im2, im1]
-            blend_image = np.stack(, axis=-1)
+            blend_image = np.stack([im1, im2, im1], axis=-1)
         else:
             blend_image = cv2.addWeighted(im1, 1 - alpha, im2, alpha, 0)
             mask = im2[:,:,0] == 0
