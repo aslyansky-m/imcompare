@@ -8,7 +8,8 @@ from tifffile import TiffFile
 import rasterio
 from scipy.ndimage import gaussian_filter1d
 from glob import glob
-from osgeo import gdal, osr
+from osgeo import gdal
+from osgeo import osr
 
 def calc_bbox(map_corners):
 	bx0 = np.min(map_corners[:, 0])
@@ -338,7 +339,7 @@ class PyramidMap:
         effective_altitude = 500
         self.map_file = map_file
         pattern = os.path.splitext(map_file)[0]
-        self.map_files = sorted(glob(pattern + '*'))
+        self.map_files = sorted(glob(pattern + '*.tif') + glob(pattern + '*.tiff'))
         self.map_pages = [TiffFile(map_file).pages[0] for map_file in self.map_files]
         self.map_object = rasterio.open(self.map_file)
         self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
