@@ -372,9 +372,9 @@ class ButtonPanel:
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
-        self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
-        self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
-        self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
+        # self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
+        # self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
+        # self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         self.help_frame = tk.Frame(self.frame)
         self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word",bg='white')
@@ -406,9 +406,9 @@ class ButtonPanel:
             self.viewport_button,
             self.contrast_button,
             self.switch_button,
-            self.grid_button,
-            self.borders_button,
-            self.debug_button,
+            # self.grid_button,
+            # self.borders_button,
+            # self.debug_button,
             self.help_button,
             self.help_frame,
             self.upload_button,
@@ -1003,14 +1003,17 @@ class ImageAlignerApp:
     def exit(self, event=None):
         self.root.quit()
         self.root.destroy()
-        
 
-def main():
-    root = tk.Tk()
+def configure_screen_size(root):
     global window_size, screen_size
     screen_size = [int(root.winfo_screenwidth()*SCREEN_FACTOR), int(root.winfo_screenheight()*SCREEN_FACTOR)]
     screen_size[0] = min(screen_size[0], int(screen_size[1]*1.9))
     window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
+
+def main():
+    root = tk.Tk()
+    global window_size, screen_size
+    configure_screen_size(root)
     root.title("TagIm Aligning App")
     root.geometry(f"{screen_size[0]}x{screen_size[1]}")
     if os.path.exists('resources/logo.jpg'):
