@@ -166,7 +166,7 @@ class ImageObject:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
                 self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
                 self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-                self.initialize_from_homography(self.M_anchors)
+                self.initialize_from_homography(self.M_anchors@np.linalg.inv(self.M_original))
                 self.save_state()
             except Exception as e:
                 print(e)
@@ -253,7 +253,7 @@ class ImageObject:
         min_dist = -1
         closest_anchor = None
         for anchor in self.anchors:
-            dist = (anchor.pos[0] - pt[0]) ** 2 + (anchor.pos[1] - pt[1]) ** 2
+            dist = np.linalg.norm(np.array(anchor.pos) - np.array(pt))
             if min_dist < 0 or dist < min_dist:
                 min_dist = dist
                 closest_anchor = anchor
@@ -263,6 +263,8 @@ class ImageObject:
         self.save_state()
 
     def relative_transform(self):
+        if self.image is None:
+            return np.eye(3)
         M = calc_transform([self.image.shape[1] * self.scale_ratio, self.image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
         T = H @ self.M_anchors @ M @ self.M_original
@@ -888,6 +890,8 @@ class ImageAlignerApp:
             self.reset_homography()
         elif event.char == 'q':
             self.reset()
+        elif event.char == 'm':
+            self.toggle_automatic_matching()
         elif event.char == 'g':
             self.toggle_grid()
         elif event.char == 'b':
