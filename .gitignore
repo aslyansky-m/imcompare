@@ -21,3 +21,7 @@ Thumbs.db
 
 # Ignore Output files   
 output/*
+
+# Ignore Pyinstaller output
+installer/dist/*
+installer/build/*

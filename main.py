@@ -5,7 +5,6 @@
 import os
 import cv2
 import numpy as np
-import types
 import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
@@ -111,14 +110,23 @@ def apply_homography(H, point):
     pt = pt[:2]/pt[2]
     return pt
 
-def draw_grid(image, grid_spacing, color=(192, 192, 192), thickness=1):
+def draw_grid(image, grid_spacing, H, color=(192, 192, 192), thickness=1):
     height, width = image.shape[:2]
     
-    for x in range(0, width, grid_spacing):
-        cv2.line(image, (x, 0), (x, height), color, thickness)
+    new_start_x = H[0, 2]
+    new_start_y = H[1, 2]
+    new_grid_spacing_x = H[0, 0] * grid_spacing
+    new_grid_spacing_y = H[1, 1] * grid_spacing
+
+    x = new_start_x
+    while x < width:
+        cv2.line(image, (int(x), 0), (int(x), height), color, thickness)
+        x += new_grid_spacing_x
     
-    for y in range(0, height, grid_spacing):
-        cv2.line(image, (0, y), (width, y), color, thickness)
+    y = new_start_y
+    while y < height:
+        cv2.line(image, (0, int(y)), (width, int(y)), color, thickness)
+        y += new_grid_spacing_y
     
     return image
 
@@ -365,6 +373,7 @@ class ButtonPanel:
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
         self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
+        self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
         self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         self.help_frame = tk.Frame(self.frame)
@@ -398,6 +407,7 @@ class ButtonPanel:
             self.contrast_button,
             self.switch_button,
             self.grid_button,
+            self.borders_button,
             self.debug_button,
             self.help_button,
             self.help_frame,
@@ -592,6 +602,7 @@ class ImageAlignerApp:
         self.rotation_mode = False
         self.draw_grid = False
         self.automatic_matching = False
+        self.show_borders = False
 
         if not 'debug_info' in dir(self):
             self.debug_info = DebugInfo(root, self)
@@ -672,10 +683,6 @@ class ImageAlignerApp:
         
         if im1 is None:
             im1 = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
-    
-        alpha = self.alpha
-        if self.toggle:
-            alpha = 1 - alpha
 
         if self.contrast_mode:
             im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
@@ -684,9 +691,14 @@ class ImageAlignerApp:
                 im1, im2 = im2, im1
             blend_image = np.stack([im1, im2, im1], axis=-1)
         else:
+            alpha = self.alpha
+            if self.toggle:
+                alpha = 1 - alpha
             blend_image = cv2.addWeighted(im1, 1 - alpha, im2, alpha, 0)
-            mask = im2[:,:,0] == 0
-            blend_image[mask] = im1[mask]
+            if self.show_borders:
+                mask = (im2[:,:,0] == 0).astype(np.uint8)
+                im1_new = cv2.multiply(im1,alpha)
+                blend_image = cv2.add(blend_image, cv2.bitwise_and(im1_new, im1_new, mask=mask))
             
         return blend_image
         
@@ -703,7 +715,7 @@ class ImageAlignerApp:
             rendered_image = (rendered_image * 0.7).astype(np.uint8)
 
         if self.draw_grid:
-            rendered_image = draw_grid(rendered_image,100)
+            rendered_image = draw_grid(rendered_image,100, self.M_global())
 
         img_pil = Image.fromarray(rendered_image)
         self.tk_image = ImageTk.PhotoImage(img_pil)
@@ -829,6 +841,11 @@ class ImageAlignerApp:
         self.debug_mode = not self.debug_mode
         self.button_panel.debug_button.config(text="Debug Mode:  ON" if self.debug_mode else "Debug Mode: OFF", bg=('grey' if self.debug_mode else 'white'))
         self.render()
+        
+    def toggle_borders(self):
+        self.show_borders = not self.show_borders
+        self.button_panel.borders_button.config(text="Show Borders:  ON" if self.show_borders else "Show Borders: OFF", bg=('grey' if self.show_borders else 'white'))
+        self.render()
     
     def undo(self, event):
         self.image.undo()
@@ -873,6 +890,8 @@ class ImageAlignerApp:
             self.reset()
         elif event.char == 'g':
             self.toggle_grid()
+        elif event.char == 'b':
+            self.toggle_borders()
         elif event.char == 'a':
             self.run_matching()
         elif event.keysym == 'Right':
@@ -994,8 +1013,9 @@ def main():
     window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
     root.title("TagIm Aligning App")
     root.geometry(f"{screen_size[0]}x{screen_size[1]}")
-    photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
-    root.wm_iconphoto(False, photo)
+    if os.path.exists('resources/logo.jpg'):
+        photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
+        root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
     app.button_panel.load_csv("input/simulated_image.csv")
