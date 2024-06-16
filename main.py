@@ -209,6 +209,8 @@ class ImageObject:
             self.load_state()
     
     def is_identity(self):
+        if self.M_anchors is None:
+            return True
         return self.x_offset == 0 and self.y_offset == 0 and self.scale == 1.0 and self.rotation == 0 \
                 and np.linalg.norm(self.M_anchors-np.eye(3)) < 1e-6
 
