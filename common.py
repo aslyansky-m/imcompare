@@ -334,7 +334,6 @@ def add_noise(im_in, noise_std):
 
 class PyramidMap:
     def __init__(self, map_file) -> None:
-        effective_altitude = 500
         self.map_file = map_file
         pattern = os.path.splitext(map_file)[0]
         self.map_files = sorted(glob(pattern + '*.tif') + glob(pattern + '*.tiff'))
@@ -342,8 +341,6 @@ class PyramidMap:
         self.map_object = rasterio.open(self.map_file)
         self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
         self.shape = [self.map_pages[0].imagelength,self.map_pages[0].imagewidth]
-        self.dataset_length = 2*int(np.prod(self.map_boundaries)/effective_altitude**2)
-        self.map_initialized = True
         self.scales = [None]*len(self.map_pages)
         for n in range(len(self.map_pages)):
             self.scales[n] = self.map_pages[0].imagelength / self.map_pages[n].imagelength
@@ -380,6 +377,27 @@ class PyramidMap:
 
     def gps2pix(self, gps):
         return np.array(self.map_object.index(gps[1], gps[0])[::-1])
+
+class NormalMap:
+	def __init__(self, map_file) -> None:
+		self.map_file = map_file
+		self.map_object = rasterio.open(self.map_file)
+		self.map_page = TiffFile(map_file).pages[0]
+		self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
+		self.shape = [self.map_page.imagelength,self.map_page.imagewidth]
+  
+	def warp_map(self, tform, output_shape):
+
+		im_out = warp_map_tiled(self.map_page, tform, output_shape)
+
+		return im_out
+    
+	def pix2gps(self, xy):
+		return np.array(self.map_object.xy(xy[1], xy[0])[::-1])
+
+	def gps2pix(self, gps):
+		return np.array(self.map_object.index(gps[1], gps[0])[::-1])
+
 
 def align_image(image, map_object, H_tot, target_size = 504):
     

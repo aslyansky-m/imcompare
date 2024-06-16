@@ -110,13 +110,20 @@ def apply_homography(H, point):
     pt = pt[:2]/pt[2]
     return pt
 
-def draw_grid(image, grid_spacing, H, color=(192, 192, 192), thickness=1):
+def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
     height, width = image.shape[:2]
     
-    new_start_x = H[0, 2]
-    new_start_y = H[1, 2]
     new_grid_spacing_x = H[0, 0] * grid_spacing
     new_grid_spacing_y = H[1, 1] * grid_spacing
+    
+    max_diff = 5.0
+    factor = np.ceil(np.log(grid_spacing/new_grid_spacing_x)/np.log(max_diff))
+    new_grid_spacing_x *= max_diff**factor
+    new_grid_spacing_y *= max_diff**factor
+    new_start_x = H[0, 2]
+    new_start_y = H[1, 2]
+    new_start_x -= (new_start_x // new_grid_spacing_x)*new_grid_spacing_x
+    new_start_y -= (new_start_y // new_grid_spacing_y)*new_grid_spacing_y
 
     x = new_start_x
     while x < width:
@@ -131,7 +138,7 @@ def draw_grid(image, grid_spacing, H, color=(192, 192, 192), thickness=1):
     return image
 
 class ImageObject:
-    def __init__(self, image_path, M_anchors = np.eye(3)):
+    def __init__(self, image_path, M_anchors = None):
         self.image_path = image_path
         self.valid = True
         self.scale = 1.0
@@ -166,7 +173,12 @@ class ImageObject:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
                 self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
                 self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-                self.initialize_from_homography(self.M_anchors@np.linalg.inv(self.M_original))
+                if self.M_anchors is not None:
+                    H = self.M_anchors @ np.linalg.inv(self.M_original)
+                    self.initialize_from_homography(H)
+                else:
+                    self.M_anchors = np.eye(3)
+                    
                 self.save_state()
             except Exception as e:
                 print(e)
@@ -374,9 +386,9 @@ class ButtonPanel:
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
         self.contrast_button = tk.Button(self.frame, text="Contrast Mode: OFF", command=self.app.toggle_contrast_mode,bg='white')
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
-        # self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
-        # self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
-        # self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
+        self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
+        self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
+        self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         self.help_frame = tk.Frame(self.frame)
         self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word",bg='white')
@@ -408,9 +420,9 @@ class ButtonPanel:
             self.viewport_button,
             self.contrast_button,
             self.switch_button,
-            # self.grid_button,
-            # self.borders_button,
-            # self.debug_button,
+            self.grid_button,
+            self.borders_button,
+            self.debug_button,
             self.help_button,
             self.help_frame,
             self.upload_button,
@@ -453,7 +465,7 @@ class ButtonPanel:
         new_objects = []
         for index, row in df.iterrows():
             image_path = row["images"]
-            H = np.eye(3)
+            H = None
             if "homography" in row:
                 parsed_H = row["homography"].replace("[","").replace("]","").replace("\n","").split()
                 parsed_H = [float(x) for x in parsed_H if x]
@@ -717,7 +729,7 @@ class ImageAlignerApp:
             rendered_image = (rendered_image * 0.7).astype(np.uint8)
 
         if self.draw_grid:
-            rendered_image = draw_grid(rendered_image,100, self.M_global())
+            rendered_image = draw_grid(rendered_image, self.M_global())
 
         img_pil = Image.fromarray(rendered_image)
         self.tk_image = ImageTk.PhotoImage(img_pil)
