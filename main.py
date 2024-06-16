@@ -460,6 +460,7 @@ class ButtonPanel:
                 self.app.display_message(f"ERROR: {map_path} does not exist")
                 return
             self.app.map = PyramidMap(map_path)
+            self.last_map = None
             self.app.display_message(f"Loaded map from: \n{map_path}")
         elif not self.app.map:
             self.app.display_message("ERROR: No map loaded")
