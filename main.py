@@ -12,6 +12,7 @@ import pandas as pd
 import time
 from pathlib import Path
 from common import *
+from enum import Enum
 
 screen_size = (1080, 700)
 window_size = screen_size
@@ -137,10 +138,33 @@ def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
     
     return image
 
+# enum for state
+class ImageState(Enum):
+    NOT_VALID = 0
+    NOT_LOADED = 1
+    INITIALIZED = 2
+    LOADED = 3
+    MOVED = 4
+    MATCHED = 5
+    LOCKED = 6
+    
+    @staticmethod
+    def to_color(state):
+        colors = {
+            ImageState.NOT_VALID: 'red',
+            ImageState.NOT_LOADED: 'white',
+            ImageState.INITIALIZED: 'Slategray1',
+            ImageState.LOADED: 'ivory',
+            ImageState.MOVED: 'SeaGreen2',
+            ImageState.MATCHED: 'RosyBrown1',
+            ImageState.LOCKED: 'forest green'
+        }
+        return colors[state]
+    
 class ImageObject:
     def __init__(self, image_path, M_anchors = None):
         self.image_path = image_path
-        self.valid = True
+        self.state = ImageState.NOT_VALID
         self.scale = 1.0
         self.rotation = 0
         self.x_offset = 0
@@ -157,18 +181,18 @@ class ImageObject:
         
         if not os.path.exists(image_path):
             self.error_message = f"Could not find image: {image_path}"
-            self.valid = False
             return
-
-        if not os.path.exists(self.image_path):
-            self.error_message = f"Could not load image: {image_path}"
-            self.valid = False
         
+        if M_anchors is None:
+            self.state = ImageState.NOT_LOADED
+        else:
+            self.state = ImageState.INITIALIZED
+
         
     def get_image(self):
-        if self.image is None:
-            if not os.path.exists(self.image_path):
-                return None
+        if self.state == ImageState.NOT_VALID:
+            return None
+        if self.state == ImageState.NOT_LOADED or self.image is None:
             try:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
                 self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
@@ -176,19 +200,22 @@ class ImageObject:
                 if self.M_anchors is not None:
                     H = self.M_anchors @ np.linalg.inv(self.M_original)
                     self.initialize_from_homography(H)
+                    self.state = ImageState.MOVED
                 else:
                     self.M_anchors = np.eye(3)
+                    self.state = ImageState.LOADED
                     
                 self.save_state()
             except Exception as e:
                 print(e)
                 return None
+            
         return self.image
 
     def save_state(self):
         if self.image is None:
             return
-        current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors)
+        current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors, self.state)
         if len(self.state_stack) > 0:
             previous_state = self.state_stack[self.current_state_index]
             identical = (np.linalg.norm(np.array(previous_state[:4]) - np.array(current_state[:4]) ) < 1e-3) and (np.linalg.norm(previous_state[5]-current_state[5]) < 1e-3)
@@ -209,15 +236,14 @@ class ImageObject:
             self.load_state()
     
     def is_identity(self):
-        if self.M_anchors is None:
-            return True
-        return self.x_offset == 0 and self.y_offset == 0 and self.scale == 1.0 and self.rotation == 0 \
-                and np.linalg.norm(self.M_anchors-np.eye(3)) < 1e-6
+        if self.M_anchors is not None and np.linalg.norm(self.M_anchors-np.eye(3)) > 1e-6:
+            return False
+        return self.x_offset == 0 and self.y_offset == 0 and self.scale == 1.0 and self.rotation == 0
 
     def load_state(self):
         if 0 <= self.current_state_index < len(self.state_stack):
             state = self.state_stack[self.current_state_index]
-            self.scale, self.rotation, self.x_offset, self.y_offset, anchor_states, self.M_anchors = state
+            self.scale, self.rotation, self.x_offset, self.y_offset, anchor_states, self.M_anchors, self.state = state
             self.anchors = [Anchor(pos[0], pos[1], original) for pos, original in anchor_states]
 
     def reset_anchors(self):
@@ -249,16 +275,13 @@ class ImageObject:
         return 
 
     def render(self, M_global):
-        if not self.valid:
+        if self.state == ImageState.NOT_VALID:
             return None
         image = self.get_image()
         if image is None:
             return None
         M = calc_transform([image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
-        if False:
-            H = np.eye(3) 
-            self.M_anchors = H
         
         result = cv2.warpPerspective(image, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
         return result
@@ -390,7 +413,7 @@ class ButtonPanel:
         self.switch_button = tk.Button(self.frame, text="Switch Images: OFF", command=self.app.toggle_images,bg='white')
         self.grid_button = tk.Button(self.frame, text="Show Grid: OFF", command=self.app.toggle_grid,bg='white')
         self.borders_button = tk.Button(self.frame, text="Show Borders: OFF", command=self.app.toggle_borders,bg='white')
-        self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
+        #self.debug_button = tk.Button(self.frame, text="Debug Mode: OFF", command=self.app.toggle_debug_mode,bg='white')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         self.help_frame = tk.Frame(self.frame)
         self.help_text_box = tk.Text(self.help_frame, height=7, width=30, wrap="word",bg='white')
@@ -424,7 +447,7 @@ class ButtonPanel:
             self.switch_button,
             self.grid_button,
             self.borders_button,
-            self.debug_button,
+            #self.debug_button,
             self.help_button,
             self.help_frame,
             self.upload_button,
@@ -473,8 +496,10 @@ class ButtonPanel:
                 parsed_H = row["homography"].replace("[","").replace("]","").replace("\n","").split()
                 parsed_H = [float(x) for x in parsed_H if x]
                 H = np.array(parsed_H).reshape(3,3)
+                if np.linalg.norm(H - np.eye(3)) < 1e-6:
+                    H = None
             new_object = ImageObject(image_path, H)
-            if new_object.valid:
+            if not new_object.state == ImageState.NOT_VALID:
                 new_objects.append(new_object)
             else:
                 self.app.display_message(f"ERROR: {new_object.error_message}")
@@ -560,7 +585,7 @@ class ButtonPanel:
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if self.app.automatic_matching and prev is not None and cur.is_identity():
+        if self.app.automatic_matching and prev is not None and (cur.state != ImageState.MOVED or cur.state != ImageState.INITIALIZED or cur.state != ImageState.LOCKED): 
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
@@ -570,6 +595,7 @@ class ButtonPanel:
                 cur_H = prev.M_anchors @ M_prev @ H_rel
                 cur.initialize_from_homography(cur_H)
             cur.reset_anchors()
+            cur.state = ImageState.MATCHED
         self.app.render()
         self.app.sync_sliders()
         
@@ -584,6 +610,10 @@ class ButtonPanel:
             return
         selected_index = self.image_listbox.curselection()[0]
         self.select_image(selected_index)
+        
+    def update_listbox(self):
+        for i, image in enumerate(self.images):
+            self.image_listbox.itemconfig(i, bg=ImageState.to_color(image.state))
 
 
 class ImageAlignerApp:
@@ -629,7 +659,7 @@ class ImageAlignerApp:
             self.canvas.pack()
             self.setup_bindings()
         
-        if not self.image.valid:
+        if self.image.state == ImageState.NOT_VALID:
             self.display_message('ERROR: ' + self.image.error_message)
         self.render()
 
@@ -655,7 +685,7 @@ class ImageAlignerApp:
         self.clear_messages()
         image_path = filedialog.askopenfilename(title='Select image to align...')
         self.image = ImageObject(image_path) 
-        if not self.image.valid:
+        if self.image.state == ImageState.NOT_VALID:
             self.display_message('ERROR: ' + self.image.error_message)
             return
         self.display_message('Image uploaded successfully')
@@ -747,6 +777,8 @@ class ImageAlignerApp:
         fps = 1/(time.time()-t)
         self.info_panel.update_fps(fps)
         self.info_panel.update_scale(self.global_scale)
+        
+        self.button_panel.update_listbox()
 
         if self.debug_mode:
             self.debug_info.show_debug_info()
@@ -794,7 +826,7 @@ class ImageAlignerApp:
         if self.help_mode:
             for key, description in descriptions:
                 self.button_panel.help_text_box.insert(tk.END, f"{key}: {description}\n")
-            self.button_panel.help_text_box.config(state=tk.NORMAL)
+            self.button_panel.help_text_box.config(state=tk.DISABLED)
     
     def toggle_homography_mode(self):
         self.homography_mode = not self.homography_mode
@@ -830,6 +862,7 @@ class ImageAlignerApp:
         self.image.y_offset = 0
         self.image.M_anchors = np.eye(3)
         self.image.reset_anchors()
+        self.image.state = ImageState.LOADED
         self.render()
         
     def run_matching(self):
@@ -959,6 +992,7 @@ class ImageAlignerApp:
         pt = apply_homography(np.linalg.inv(self.M_global()), pt0)
         if self.homography_mode and not self.viewport_mode:
             self.image.push_anchor(pt)
+            self.image.state = ImageState.MOVED
             self.render()
             return
 
@@ -992,6 +1026,7 @@ class ImageAlignerApp:
         else:
             self.image.x_offset += pt[0] - self.drag_start_x
             self.image.y_offset += pt[1] - self.drag_start_y
+            self.image.state = ImageState.MOVED
             self.drag_start_x = pt[0]
             self.drag_start_y = pt[1]
         self.render()
@@ -1040,7 +1075,7 @@ def main():
         root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    app.button_panel.load_csv("input/simulated_image.csv")
+    app.button_panel.load_csv("input/simulated_list.csv")
 
     root.mainloop()
 
