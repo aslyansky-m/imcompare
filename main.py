@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from common import *
 from enum import Enum
+from panorama import stitch_images
 
 screen_size = (1080, 700)
 window_size = screen_size
@@ -406,6 +407,7 @@ class ButtonPanel:
 
         self.homography_button = tk.Button(self.frame, text="Homography Mode: OFF", command=self.app.toggle_homography_mode,bg='white')
         self.homography_reset_button = tk.Button(self.frame, text="Reset Homography", command=self.app.reset_homography,bg='white')
+        self.panorama_button = tk.Button(self.frame, text="Create Panorama", command=self.app.create_panorama,bg='white')
         self.homography_calculate_button = tk.Button(self.frame, text="Calculate Homography", command=self.app.run_matching,bg='white')
         self.automatic_matching_button = tk.Button(self.frame, text="Automatic Matching: OFF", command=self.app.toggle_automatic_matching,bg='white')
         self.viewport_button = tk.Button(self.frame, text="Viewport Mode: OFF", command=self.app.toggle_viewport_mode,bg='white')
@@ -440,6 +442,7 @@ class ButtonPanel:
             self.scale_slider,
             self.homography_button,
             self.homography_reset_button,
+            self.panorama_button,
             self.homography_calculate_button,
             self.automatic_matching_button,
             self.viewport_button,
@@ -585,7 +588,7 @@ class ButtonPanel:
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if self.app.automatic_matching and prev is not None and (cur.state != ImageState.MOVED or cur.state != ImageState.INITIALIZED or cur.state != ImageState.LOCKED): 
+        if self.app.automatic_matching and prev is not None and (cur.state == ImageState.NOT_LOADED or cur.state == ImageState.LOADED or cur.state == ImageState.MATCHED): 
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
@@ -782,6 +785,16 @@ class ImageAlignerApp:
 
         if self.debug_mode:
             self.debug_info.show_debug_info()
+            
+    def create_panorama(self):
+        images = [image.get_image() for image in self.button_panel.images]
+        stitch_image = stitch_images(images)
+        # import matplotlib.pyplot as plt
+        # plt.figure(figsize=(10,10))
+        # plt.imshow(stitch_image)
+        # plt.axis('off')
+        # plt.show()
+        
 
     # Event Handlers
     def update_alpha(self, val):

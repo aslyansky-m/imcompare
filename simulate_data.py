@@ -8,7 +8,7 @@ from common import rotation_matrix, scale_matrix, translation_matrix
 
 
 # Load the image
-image = cv2.imread('input/hrscd/map.tif')
+image = cv2.imread('output/hrscd/map.tif')
 
 # Define the size of the output images
 output_size = (640, 512)
@@ -17,7 +17,8 @@ output_size = (640, 512)
 num_images = 30
 
 # Create the output directory if it doesn't exist
-os.makedirs('output/simulated/', exist_ok=True)
+output_fld = 'output/simulated2/'
+os.makedirs(output_fld, exist_ok=True)
 
 height, width = image.shape[:2] 
 image_center = np.array([width/2, height/2]) 
@@ -26,8 +27,8 @@ center = np.array(output_size)/2
 t = np.linspace(0, 1, num_images)
 
 scales = 1.3*interp1d([0,0.2,0.3,0.4, 1], [0.3,0.4,0.9,1.0,1.0],kind='linear')(t)
-shift_x = -image_center[0]*0.3+interp1d([0,0.2,0.5, 1], [-50, 50, 50, -50],kind='cubic')(t)
-shift_y = -image_center[1]*0.4+interp1d([0,0.2,0.5, 1], [-50, -50, 50, 50],kind='cubic')(t)
+shift_x = -image_center[0]*0.5+10*interp1d([0,0.2,0.5, 1], [-50, 50, 20, -20],kind='cubic')(t)
+shift_y = -image_center[1]*0.5+10*interp1d([0,0.2,0.5, 1], [-50, -50, 20, 20],kind='cubic')(t)
 rotations = interp1d([0,0.2,0.5, 1], [-np.pi/6, 0, 0, np.pi/6],kind='cubic')(t)
 
 # fig, ax = plt.subplots(4, 1, figsize=(6, 6))
@@ -44,7 +45,7 @@ rotations = interp1d([0,0.2,0.5, 1], [-np.pi/6, 0, 0, np.pi/6],kind='cubic')(t)
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 
 # Generate the images
-imfile_path = 'output/simulated_list.csv'
+imfile_path = 'output/simulated_list2.csv'
 imfiles = []
 for i in range(num_images):
 
@@ -62,8 +63,8 @@ for i in range(num_images):
     # Save the image
     # cv2.imshow('output', warped_image)
     # cv2.waitKey(100)
-    imfile = f'output/simulated/image_{i:02}.jpg'
-    # cv2.imwrite(imfile, warped_image)
+    imfile = f'{output_fld}image_{i:02}.jpg'
+    cv2.imwrite(imfile, warped_image)
     
     imfiles.append(imfile)
     
