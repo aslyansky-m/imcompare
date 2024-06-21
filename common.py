@@ -3,10 +3,7 @@ import numpy as np
 import math
 import os
 import pymap3d as pm
-from skimage import transform
-from tifffile import TiffFile
 import rasterio
-from scipy.ndimage import gaussian_filter1d
 from glob import glob
 
 def calc_bbox(map_corners):
@@ -18,6 +15,7 @@ def calc_bbox(map_corners):
 
 
 def estimate_transform(src, dst, ttype=3):
+	from skimage import transform
 	if ttype == 0:
 		min_x = np.min(dst[:, 0])
 		max_x = np.max(dst[:, 0])
@@ -280,14 +278,14 @@ def calc_crop(map_shape, map_corners, template_size, target_size, random=True, p
 		start = center
 	else:
 		possible_perms = [np.array([center[0] - fixed_margin, center[1] - fixed_margin]),
-                          np.array([center[0] + fixed_margin, center[1] - fixed_margin]),
-                          np.array([center[0] - fixed_margin, center[1] + fixed_margin]),
-                          np.array([center[0] + fixed_margin, center[1] + fixed_margin]),
-                          np.array([center[0], center[1] - fixed_margin]),
-                          np.array([center[0], center[1] + fixed_margin]),
-                          np.array([center[0] - fixed_margin, center[1]]),
-                          np.array([center[0] + fixed_margin, center[1]]),
-                          center]
+						  np.array([center[0] + fixed_margin, center[1] - fixed_margin]),
+						  np.array([center[0] - fixed_margin, center[1] + fixed_margin]),
+						  np.array([center[0] + fixed_margin, center[1] + fixed_margin]),
+						  np.array([center[0], center[1] - fixed_margin]),
+						  np.array([center[0], center[1] + fixed_margin]),
+						  np.array([center[0] - fixed_margin, center[1]]),
+						  np.array([center[0] + fixed_margin, center[1]]),
+						  center]
 		start = possible_perms[perm_index % len(possible_perms)]
 		
 
@@ -317,7 +315,8 @@ def calc_crop(map_shape, map_corners, template_size, target_size, random=True, p
 
 
 def add_noise(im_in, noise_std):
-	im_shape = im_in.shape
+	from scipy.ndimage import gaussian_filter1d
+	shape = im_in.shape
 
 	gaussian_std = np.random.rand()*noise_std*3
 	row_std = np.random.rand()*noise_std
@@ -333,65 +332,67 @@ def add_noise(im_in, noise_std):
 	return im_out
 
 class PyramidMap:
-    def __init__(self, map_file) -> None:
-        self.map_file = map_file
-        pattern = os.path.splitext(map_file)[0]
-        self.map_files = sorted(glob(pattern + '*.tif') + glob(pattern + '*.tiff'))
-        self.map_pages = [TiffFile(map_file).pages[0] for map_file in self.map_files]
-        self.map_object = rasterio.open(self.map_file)
-        self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
-        self.shape = [self.map_pages[0].imagelength,self.map_pages[0].imagewidth]
-        self.scales = [None]*len(self.map_pages)
-        for n in range(len(self.map_pages)):
-            self.scales[n] = self.map_pages[0].imagelength / self.map_pages[n].imagelength
-    
-    def warp_map(self, tform, output_shape):
-        [H, W] = self.shape
-        (w, h) = output_shape
-        corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]])
-        new_corners = apply_tform(np.linalg.inv(tform), corners)
-        min_x = np.floor(np.min(new_corners[:, 0])).astype(int)
-        max_x = np.ceil(np.max(new_corners[:, 0])).astype(int)
-        min_x = min(W-1, max(0, min_x))
-        max_x = min(W-1, max(0, max_x))
-        
-        target_scale = (max_x-min_x)/output_shape[0]
-        
-        cur_map = 0
-        
-        for i in range(1,len(self.scales)):
-            if (self.scales[i] > target_scale):
-                break
-            cur_map = i
+	def __init__(self, map_file) -> None:
+		from tifffile import TiffFile
+		self.map_file = map_file
+		pattern = os.path.splitext(map_file)[0]
+		self.map_files = sorted(glob(pattern + '*.tif') + glob(pattern + '*.tiff'))
+		self.map_pages = [TiffFile(map_file).pages[0] for map_file in self.map_files]
+		self.map_object = rasterio.open(self.map_file)
+		self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
+		self.shape = [self.map_pages[0].imagelength,self.map_pages[0].imagewidth]
+		self.scales = [None]*len(self.map_pages)
+		for n in range(len(self.map_pages)):
+			self.scales[n] = self.map_pages[0].imagelength / self.map_pages[n].imagelength
+	
+	def warp_map(self, tform, output_shape):
+		[H, W] = self.shape
+		(w, h) = output_shape
+		corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]])
+		new_corners = apply_tform(np.linalg.inv(tform), corners)
+		min_x = np.floor(np.min(new_corners[:, 0])).astype(int)
+		max_x = np.ceil(np.max(new_corners[:, 0])).astype(int)
+		min_x = min(W-1, max(0, min_x))
+		max_x = min(W-1, max(0, max_x))
+		
+		target_scale = (max_x-min_x)/output_shape[0]
+		
+		cur_map = 0
+		
+		for i in range(1,len(self.scales)):
+			if (self.scales[i] > target_scale):
+				break
+			cur_map = i
 
-        cur_scale = self.scales[cur_map]
-        H_scale = scale_matrix(cur_scale)
-        H_fixed =  tform @ H_scale
+		cur_scale = self.scales[cur_map]
+		H_scale = scale_matrix(cur_scale)
+		H_fixed =  tform @ H_scale
 
-        im_out = warp_map_tiled(self.map_pages[cur_map], H_fixed, output_shape)
-        
-        return im_out
-    
-    def pix2gps(self, xy):
-        return np.array(self.map_object.xy(xy[1], xy[0])[::-1])
+		im_out = warp_map_tiled(self.map_pages[cur_map], H_fixed, output_shape)
+		
+		return im_out
+	
+	def pix2gps(self, xy):
+		return np.array(self.map_object.xy(xy[1], xy[0])[::-1])
 
-    def gps2pix(self, gps):
-        return np.array(self.map_object.index(gps[1], gps[0])[::-1])
+	def gps2pix(self, gps):
+		return np.array(self.map_object.index(gps[1], gps[0])[::-1])
 
 class NormalMap:
 	def __init__(self, map_file) -> None:
+		from tifffile import TiffFile
 		self.map_file = map_file
 		self.map_object = rasterio.open(self.map_file)
+		# self.image = cv2.cvtColor(cv2.imread(map_file), cv2.COLOR_BGR2RGB) 
 		self.map_page = TiffFile(map_file).pages[0]
 		self.map_boundaries = gps2enu(self.map_object, pix2gps(self.map_object, [self.map_object.width,0]))[:2]
 		self.shape = [self.map_page.imagelength,self.map_page.imagewidth]
   
 	def warp_map(self, tform, output_shape):
-
 		im_out = warp_map_tiled(self.map_page, tform, output_shape)
-
+		# im_out = cv2.warpPerspective(self.image, tform, output_shape) 
 		return im_out
-    
+	
 	def pix2gps(self, xy):
 		return np.array(self.map_object.xy(xy[1], xy[0])[::-1])
 
@@ -400,83 +401,84 @@ class NormalMap:
 
 
 def align_image(image, map_object, H_tot, target_size = 504):
-    
-    (h,w) = image.shape[:2]
-    corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).astype(np.float32)
-    map_corners = apply_tform(np.linalg.inv(H_tot), corners)
+	
+	(h,w) = image.shape[:2]
+	corners = np.array([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).astype(np.float32)
+	map_corners = apply_tform(np.linalg.inv(H_tot), corners)
 
-    bx0, bx1, by0, by1 = calc_bbox(map_corners)
+	bx0, bx1, by0, by1 = calc_bbox(map_corners)
 
-    bbox_pix = np.array([[bx0,by0], [bx1,  by1]])
+	bbox_pix = np.array([[bx0,by0], [bx1,  by1]])
 
-    ds_ratio = target_size / abs(bx1 - bx0)
-    S = np.diag([ds_ratio, ds_ratio, 1])
+	ds_ratio = target_size / abs(bx1 - bx0)
+	S = np.diag([ds_ratio, ds_ratio, 1])
 
-    output_size = [target_size,abs(int(target_size*(by1 - by0)/(bx1 - bx0)))]
+	output_size = [target_size,abs(int(target_size*(by1 - by0)/(bx1 - bx0)))]
 
-    start = np.array([bx0, by0])
-    T = translation_matrix(-start)
-    H_crop = np.matmul(S, T)
+	start = np.array([bx0, by0])
+	T = translation_matrix(-start)
+	H_crop = np.matmul(S, T)
 
-    crop = map_object.warp_map(H_crop, output_size)
+	crop = map_object.warp_map(H_crop, output_size)
 
-    warped_corners = apply_tform(H_crop, map_corners).astype(int)
-    bx0, bx1, by0, by1 = calc_bbox(warped_corners)
-    loc_guess = np.array([(bx0 + bx1) / 2, (by0 + by1) / 2]) - np.array(output_size) / 2
+	warped_corners = apply_tform(H_crop, map_corners).astype(int)
+	bx0, bx1, by0, by1 = calc_bbox(warped_corners)
+	loc_guess = np.array([(bx0 + bx1) / 2, (by0 + by1) / 2]) - np.array(output_size) / 2
 
-    # calculate second image warp
-    new_corners2 = warped_corners - np.array(loc_guess)[np.newaxis]
-    H_align = estimate_transform(corners, new_corners2, 3)
-    query_aligned = cv2.warpPerspective(image, H_align, output_size)
-    
-    bbox_gps = []
-    for corner in bbox_pix:
-        gps_corner = pix2gps(map_object.map_object,corner)
-        bbox_gps.append(gps_corner)
-    bbox_gps = np.array(bbox_gps)
-    
-    return query_aligned, bbox_gps
+	# calculate second image warp
+	new_corners2 = warped_corners - np.array(loc_guess)[np.newaxis]
+	H_align = estimate_transform(corners, new_corners2, 3)
+	query_aligned = cv2.warpPerspective(image, H_align, output_size)
+	
+	bbox_gps = []
+	for corner in bbox_pix:
+		gps_corner = pix2gps(map_object.map_object,corner)
+		bbox_gps.append(gps_corner)
+	bbox_gps = np.array(bbox_gps)
+	
+	return query_aligned, bbox_gps
 
 
-import rasterio
-from rasterio.transform import from_bounds
-from rasterio.enums import ColorInterp
+
 
 def dump_geotif(query_aligned, bbox_gps, output_file):
-    extent = bbox_gps.flatten()
-    (im_h, im_w, _) = query_aligned.shape
-    data_type = rasterio.uint8
-    transform = from_bounds(extent[1], extent[2], extent[3], extent[0], width=im_w, height=im_h)
-    mask = ((np.sum(query_aligned, axis=2) > 0) * 255).astype(np.uint8)
-    
-    # Manually set the WKT for WGS84
-    # from pyproj import CRS
+	import rasterio
+	from rasterio.transform import from_bounds
+	from rasterio.enums import ColorInterp
+	extent = bbox_gps.flatten()
+	(im_h, im_w, _) = query_aligned.shape
+	data_type = rasterio.uint8
+	transform = from_bounds(extent[1], extent[2], extent[3], extent[0], width=im_w, height=im_h)
+	mask = ((np.sum(query_aligned, axis=2) > 0) * 255).astype(np.uint8)
+	
+	# Manually set the WKT for WGS84
+	# from pyproj import CRS
 	# crs = CRS.from_proj4('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs').to_wkt()
-    crs = 'GEOGCRS["unknown",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ID["EPSG",6326]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8901]],CS[ellipsoidal,2],AXIS["longitude",east,ORDER[1],ANGLEUNIT["degree",0.0174532925199433,ID["EPSG",9122]]],AXIS["latitude",north,ORDER[2],ANGLEUNIT["degree",0.0174532925199433,ID["EPSG",9122]]]]'
+	crs = 'GEOGCRS["unknown",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ID["EPSG",6326]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8901]],CS[ellipsoidal,2],AXIS["longitude",east,ORDER[1],ANGLEUNIT["degree",0.0174532925199433,ID["EPSG",9122]]],AXIS["latitude",north,ORDER[2],ANGLEUNIT["degree",0.0174532925199433,ID["EPSG",9122]]]]'
 
-    with rasterio.open(
-        output_file, 'w',
-        driver='GTiff',
-        height=im_h,
-        width=im_w,
-        count=4,
-        dtype=data_type,
-        crs=crs,
-        transform=transform,
-        photometric='RGB'
-    ) as dst:
-        dst.write(query_aligned[:, :, 0].squeeze(), 1)
-        dst.write(query_aligned[:, :, 1].squeeze(), 2)
-        dst.write(query_aligned[:, :, 2].squeeze(), 3)
-        dst.write(mask.squeeze(), 4)
-        
-        dst.colorinterp = [
-            ColorInterp.red,
-            ColorInterp.green,
-            ColorInterp.blue,
-            ColorInterp.alpha
-        ]
-        
+	with rasterio.open(
+		output_file, 'w',
+		driver='GTiff',
+		height=im_h,
+		width=im_w,
+		count=4,
+		dtype=data_type,
+		crs=crs,
+		transform=transform,
+		photometric='RGB'
+	) as dst:
+		dst.write(query_aligned[:, :, 0].squeeze(), 1)
+		dst.write(query_aligned[:, :, 1].squeeze(), 2)
+		dst.write(query_aligned[:, :, 2].squeeze(), 3)
+		dst.write(mask.squeeze(), 4)
+		
+		dst.colorinterp = [
+			ColorInterp.red,
+			ColorInterp.green,
+			ColorInterp.blue,
+			ColorInterp.alpha
+		]
+		
 ## gdal version
 # from osgeo import gdal, osr
 # def getGeoTransform(extent, nx, ny):

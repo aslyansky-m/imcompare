@@ -27,9 +27,12 @@ def sift_matching_with_homography(img1, img2):
     else:
         return None
 
-sift = cv2.SIFT_create(nfeatures=1000)
+sift = None 
 
 def get_sift_features(image):
+    global sift
+    if sift is None:
+        sift = cv2.SIFT_create(nfeatures=1000)
     return sift.detectAndCompute(image, None)
 
 def match_sift_features(feat1, feat2, use_knn=False):
