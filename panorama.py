@@ -1,6 +1,5 @@
 import cv2
 import numpy as np 
-import matplotlib.pyplot as plt 
 from glob import glob
 import networkx as nx
 import tkinter as tk
@@ -316,5 +315,6 @@ if __name__ == "__main__":
     images = [cv2.imread(image_file) for image_file in image_files]
     cache = create_cache(images)
     panorama, transforms = stitch_images(images, cache)
+    import matplotlib.pyplot as plt 
     plt.imshow(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
     plt.show()

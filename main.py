@@ -103,8 +103,8 @@ def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
     new_grid_spacing_y *= max_diff**factor
     new_start_x = H[0, 2]
     new_start_y = H[1, 2]
-    new_start_x -= (new_start_x // new_grid_spacing_x)*new_grid_spacing_x
-    new_start_y -= (new_start_y // new_grid_spacing_y)*new_grid_spacing_y
+    new_start_x -= (new_start_x / new_grid_spacing_x)*new_grid_spacing_x
+    new_start_y -= (new_start_y / new_grid_spacing_y)*new_grid_spacing_y
 
     x = new_start_x
     while x < width:
@@ -262,8 +262,6 @@ class ImageObject:
     def render(self, M_global):
         if self.state == ImageState.NOT_VALID:
             return None
-        if self.is_panorama:
-            self.state = ImageState.PANORAMA
         image = self.get_image()
         if image is None:
             return None
@@ -783,7 +781,7 @@ class ImageAlignerApp:
         rendered_image = self.blend_images()
 
         if self.viewport_mode:
-            rendered_image = (rendered_image * 0.7).astype(np.uint8)
+            rendered_image = cv2.rectangle(rendered_image, (0, 0), (window_size[0], window_size[1]), (0, 0, 255), 10)
 
         if self.draw_grid:
             rendered_image = draw_grid(rendered_image, self.M_global())
