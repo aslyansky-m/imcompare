@@ -157,8 +157,8 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
             update_progress_bar(total_progress, global_ratio * 100)
 
     metric = np.minimum(ratios, inliers / 100)
-    np.seterr(divide = 'ignore') 
     step_penalty = 0.1
+    np.seterr(divide = 'ignore')
     scores = -np.log(metric + metric.T) + step_penalty
     np.seterr(divide = 'warn') 
 
