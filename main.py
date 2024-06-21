@@ -103,8 +103,8 @@ def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
     new_grid_spacing_y *= max_diff**factor
     new_start_x = H[0, 2]
     new_start_y = H[1, 2]
-    new_start_x -= (new_start_x / new_grid_spacing_x)*new_grid_spacing_x
-    new_start_y -= (new_start_y / new_grid_spacing_y)*new_grid_spacing_y
+    new_start_x -= np.round(new_start_x / new_grid_spacing_x)*new_grid_spacing_x
+    new_start_y -= np.round(new_start_y / new_grid_spacing_y)*new_grid_spacing_y
 
     x = new_start_x
     while x < width:
@@ -779,12 +779,12 @@ class ImageAlignerApp:
             self.image.save_state()
             
         rendered_image = self.blend_images()
+        
+        if self.draw_grid:
+            rendered_image = draw_grid(rendered_image, self.M_global())
 
         if self.viewport_mode:
             rendered_image = cv2.rectangle(rendered_image, (0, 0), (window_size[0], window_size[1]), (0, 0, 255), 10)
-
-        if self.draw_grid:
-            rendered_image = draw_grid(rendered_image, self.M_global())
 
         img_pil = Image.fromarray(rendered_image)
         self.tk_image = ImageTk.PhotoImage(img_pil)
