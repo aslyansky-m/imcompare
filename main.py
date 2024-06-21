@@ -534,6 +534,7 @@ class ButtonPanel:
         else:
             self.app.display_message(f"ERROR: No valid image pairs found in CSV: \n{file_path}")
         self.app.image = None
+        self.app.panorama_cache = None
         self.select_image(0)
         self.app.sync_sliders()
 
