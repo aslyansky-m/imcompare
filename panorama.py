@@ -156,8 +156,11 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
             update_progress_bar(current_progress, cur_ratio * 100)
             update_progress_bar(total_progress, global_ratio * 100)
 
-    temp = np.minimum(ratios, inliers / 100)
-    scores = -np.log(temp + temp.T)
+    metric = np.minimum(ratios, inliers / 100)
+    np.seterr(divide = 'ignore') 
+    step_penalty = 0.1
+    scores = -np.log(metric + metric.T) + step_penalty
+    np.seterr(divide = 'warn') 
 
     # Step 3: Computing homographies
     update_step_label("Computing homographies")
@@ -168,7 +171,7 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
         src = i
         H = np.eye(3)
         if src != main_image:
-            path, weight = lightest_path(scores + 0.1, main_image, src)
+            path, weight = lightest_path(scores, main_image, src)
             if weight > weight_threshold:
                 H = None
             else:
