@@ -103,7 +103,7 @@ def update_progress_bar(progress_bar, value):
     progress_bar['value'] = value
     progress_bar.update()
 
-def create_cache(images, with_gui=True, step_penalty = 0.1):
+def create_cache(images, with_gui=True, step_penalty = 0.1, matching_dist=10):
 
     if with_gui:
         root = tk.Tk()
@@ -151,11 +151,12 @@ def create_cache(images, with_gui=True, step_penalty = 0.1):
     step = 0
     for i in range(N):
         for j in range(i):
-            H, score, inlier = match_sift_features(features[i], features[j])
-            ratios[i, j] = score
-            inliers[i, j] = inlier
-            matrices[i][j] = H
-            matrices[j][i] = np.linalg.inv(H)
+            if abs(i-j) < matching_dist:
+                H, score, inlier = match_sift_features(features[i], features[j])
+                ratios[i, j] = score
+                inliers[i, j] = inlier
+                matrices[i][j] = H
+                matrices[j][i] = np.linalg.inv(H)
             step += 1
             cur_ratio = step / (N*(N-1)/2)
             global_ratio = (time_ratio*N + (1-time_ratio)*step)/total_steps
@@ -174,7 +175,7 @@ def create_cache(images, with_gui=True, step_penalty = 0.1):
         root.destroy()
     return cache
     
-def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=True):
+def stitch_images(images, cache, main_image=0, weight_threshold=1.0, target_size = [1920, 1080], with_gui=True):
 
     if with_gui:
         root = tk.Tk()
@@ -210,7 +211,8 @@ def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=Tr
     # Step 1: Computing homographies
     update_step_label("Computing homographies")
     homographies = []
-    transformed_corners_list = []
+    min_x, min_y = np.inf, np.inf
+    max_x, max_y = -np.inf, -np.inf
     for i in range(N):
         src = i
         H = np.eye(3)
@@ -224,26 +226,21 @@ def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=Tr
                     H = H @ H_rel
 
         homographies.append(H)
-
+        
         if H is not None:
             corners = get_image_corners(images[i])
             transformed_corners = transform_corners(corners, H)
-            transformed_corners_list.append(transformed_corners)
+            min_x = min(min_x, np.min(transformed_corners[0]))
+            max_x = max(max_x, np.max(transformed_corners[0]))
+            min_y = min(min_y, np.min(transformed_corners[1]))
+            max_y = max(max_y, np.max(transformed_corners[1]))
         
         cur_ratio = i / N
         global_ratio = (2+cur_ratio)/total_steps
         update_progress_bar(total_progress, global_ratio * 100)
         update_progress_bar(current_progress, cur_ratio * 100)
 
-    min_x, min_y = float('inf'), float('inf')
-    max_x, max_y = float('-inf'), float('-inf')
-
-    for transformed_corners in transformed_corners_list:
-        min_x = min(min_x, np.min(transformed_corners[0]))
-        max_x = max(max_x, np.max(transformed_corners[0]))
-        min_y = min(min_y, np.min(transformed_corners[1]))
-        max_y = max(max_y, np.max(transformed_corners[1]))
-
+    
     offset_x = -min_x
     offset_y = -min_y
     H_translation = np.array([
@@ -251,8 +248,8 @@ def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=Tr
         [0, 1, offset_y],
         [0, 0, 1]
     ])
-    scale_x = 1920 / (max_x - min_x)
-    scale_y = 1080 / (max_y - min_y)
+    scale_x = target_size[0] / (max_x - min_x)
+    scale_y = target_size[1] / (max_y - min_y)
     scale = min(scale_x, scale_y)
     H_scale = np.array([
         [scale, 0, 0],
@@ -266,11 +263,14 @@ def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=Tr
     aligned_images = []
 
     # Step 2: Warping images
+    scales = []
     update_step_label("Warping images")
     for i in range(N):
         if homographies[i] is None:
             final_transforms.append(None)
             continue
+        scale = 1/np.linalg.norm(homographies[i][:2, :2])
+        scales.append(scale)
         H_final = H_scale @ H_translation @ homographies[i]
         im = cv2.warpPerspective(images[i], H_final, (panorama_width, panorama_height))
         if len(im.shape) == 2:
@@ -287,8 +287,9 @@ def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=Tr
     
     # Step 3: Stitching images
     update_step_label("Stitching images")
-    cur_steps_completed = 0
-    for i, image in enumerate(aligned_images):
+    order = np.argsort(scales)
+    for i, ind in enumerate(order):
+        image = aligned_images[ind]
         mask = ((image > 0) * 255).astype(np.uint8)
         mask = cv2.erode(mask.astype(np.uint8), np.ones((5, 5), np.uint8))[:, :, 0]
         sum_image[mask > 0] = image[mask > 0]

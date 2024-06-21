@@ -833,6 +833,11 @@ class ImageAlignerApp:
                 self.panorama_cache = create_cache(good_images)
                 self.panorama_cache["files"] = good_files
         panorama_image, final_transforms = stitch_images(good_images, self.panorama_cache, dst)
+        num_good = len([x for x in final_transforms if x is not None])
+        if num_good < 2:
+            self.clear_messages()
+            self.display_message("ERROR: Failed to create panorama")
+            return
         #calculate it's homography based on selected image
         H_rel = np.linalg.inv(final_transforms[dst])
         selected = self.image
