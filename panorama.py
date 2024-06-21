@@ -2,10 +2,33 @@ import cv2
 import numpy as np 
 import matplotlib.pyplot as plt 
 from glob import glob
-from tqdm import tqdm, trange
 import networkx as nx
+import tkinter as tk
+from tkinter import ttk
+
+def sift_matching_with_homography(img1, img2):
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
+    sift = cv2.SIFT_create()
+    keypoints1, descriptors1 = sift.detectAndCompute(gray1, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(gray2, None)
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=50)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+    matches = flann.knnMatch(descriptors1, descriptors2, k=2)
+    good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
+
+    if len(good_matches) > 10:
+        src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 2)
+        dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 2)
+        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        return H
+    else:
+        return None
 
 sift = cv2.SIFT_create(nfeatures=1000)
+
 def get_sift_features(image):
     return sift.detectAndCompute(image, None)
 
@@ -39,7 +62,7 @@ def match_sift_features(feat1, feat2, use_knn=False):
         return H, np.mean(mask), np.sum(mask)
     else:
         return np.eye(3), 0, 0
-    
+
 def lightest_path(adj_matrix, source, target):
     # Create a graph from the adjacency matrix
     G = nx.Graph()
@@ -74,51 +97,97 @@ def transform_corners(corners, H):
     transformed_corners /= transformed_corners[2]  # Normalize by the last row
     return transformed_corners[:2]
 
-    
-def stitch_images(images):
+def update_progress_bar(progress_bar, value):
+    if progress_bar is None:
+        return
+    progress_bar['value'] = value
+    progress_bar.update()
+
+def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
     features = []
 
-    for image in images:
-        features.append(get_sift_features(image))
+    if with_gui:
+        root = tk.Tk()
+        root.title("Panorama Stitching Progress")
+
+        step_label = tk.Label(root, text="Initializing...")
+        step_label.pack(padx=10,pady=10)
+        
+        current_progress = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+        current_progress.pack(padx=10,pady=10)
+        
+        total_progress = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+        total_progress.pack(padx=10,pady=10)
+    else:
+        current_progress = None
+        total_progress = None
 
     N = len(images)
+    total_steps = 5
 
-    inliers = np.zeros([N,N])
-    ratios = np.zeros([N,N])
-    Hs = []
+    def update_step_label(text):
+        if with_gui:
+            step_label.config(text=text)
+            step_label.update()
 
+    # Step 1: Extracting features
+    update_step_label("Extracting features")
+    for i, image in enumerate(images):
+        features.append(get_sift_features(image))
+        cur_ratio = i / N
+        global_ratio = cur_ratio/total_steps
+        update_progress_bar(total_progress, global_ratio * 100)
+        update_progress_bar(current_progress, cur_ratio * 100)
+
+    inliers = np.zeros([N, N])
+    ratios = np.zeros([N, N])
+
+    # Step 2: Matching features
+    update_step_label("Matching features")
+    step = 0
     for i in range(N):
         for j in range(i):
             H, score, inlier = match_sift_features(features[i], features[j])
-            ratios[i,j] = score
-            inliers[i,j] = inlier
-    
-    temp = np.minimum(ratios,inliers/100)
+            ratios[i, j] = score
+            inliers[i, j] = inlier
+            step += 1
+            cur_ratio = step / (N*(N-1)/2)
+            global_ratio = (1+cur_ratio)/total_steps
+            update_progress_bar(current_progress, cur_ratio * 100)
+            update_progress_bar(total_progress, global_ratio * 100)
+
+    temp = np.minimum(ratios, inliers / 100)
     scores = -np.log(temp + temp.T)
-    
-    # Precompute homographies and transformed corners
+
+    # Step 3: Computing homographies
+    update_step_label("Computing homographies")
+    cur_steps_completed = 0
     homographies = []
     transformed_corners_list = []
-    upscale = 3.0
-    new_shape = (int(images[0].shape[1] * upscale), int(images[0].shape[0] * upscale))
-    H_upscale = np.diag([upscale, upscale, 1])
-
-    for i in range(0, 16):
+    for i in range(N):
+        src = i
         H = np.eye(3)
-        if i > 0:
-            path, weight = lightest_path(scores + 0.1, 0, i)
-            for j in range(1, len(path)):
-                H_rel, _, _ = match_sift_features(features[path[j]], features[path[j - 1]])
-                H = H @ H_rel
-        
-        H_final = H_upscale @ H
-        homographies.append(H_final)
-        
-        corners = get_image_corners(images[i])
-        transformed_corners = transform_corners(corners, H_final)
-        transformed_corners_list.append(transformed_corners)
+        if src != main_image:
+            path, weight = lightest_path(scores + 0.1, main_image, src)
+            if weight > weight_threshold:
+                H = None
+            else:
+                for j in range(1, len(path)):
+                    H_rel, _, _ = match_sift_features(features[path[j]], features[path[j - 1]])
+                    H = H @ H_rel
 
-    # Determine the bounds of the panorama
+        homographies.append(H)
+
+        if H is not None:
+            corners = get_image_corners(images[i])
+            transformed_corners = transform_corners(corners, H)
+            transformed_corners_list.append(transformed_corners)
+        
+        cur_ratio = i / N
+        global_ratio = (2+cur_ratio)/total_steps
+        update_progress_bar(total_progress, global_ratio * 100)
+        update_progress_bar(current_progress, cur_ratio * 100)
+
     min_x, min_y = float('inf'), float('inf')
     max_x, max_y = float('-inf'), float('-inf')
 
@@ -128,9 +197,6 @@ def stitch_images(images):
         min_y = min(min_y, np.min(transformed_corners[1]))
         max_y = max(max_y, np.max(transformed_corners[1]))
 
-    # Calculate the size of the final panorama
-    panorama_width = int(np.ceil(max_x - min_x))
-    panorama_height = int(np.ceil(max_y - min_y))
     offset_x = -min_x
     offset_y = -min_y
     H_translation = np.array([
@@ -138,20 +204,61 @@ def stitch_images(images):
         [0, 1, offset_y],
         [0, 0, 1]
     ])
+    scale_x = 1920 / (max_x - min_x)
+    scale_y = 1080 / (max_y - min_y)
+    scale = min(scale_x, scale_y)
+    H_scale = np.array([
+        [scale, 0, 0],
+        [0, scale, 0],
+        [0, 0, 1]
+    ])
+    panorama_width = int(np.ceil(max_x - min_x) * scale)
+    panorama_height = int(np.ceil(max_y - min_y) * scale)
 
-    # Stitch the images into the final panorama
+    final_transforms = []
     aligned_images = []
-    for i in range(0, 16):
-        H_final = H_translation @ homographies[i]
+
+    # Step 4: Warping images
+    update_step_label("Warping images")
+    for i in range(N):
+        if homographies[i] is None:
+            final_transforms.append(None)
+            continue
+        H_final = H_scale @ H_translation @ homographies[i]
         im = cv2.warpPerspective(images[i], H_final, (panorama_width, panorama_height))
         if len(im.shape) == 2:
             im = cv2.cvtColor(im, cv2.COLOR_GRAY2RGB)
+        final_transforms.append(H_final)
         aligned_images.append(im)
+        
+        cur_ratio = i / N
+        global_ratio = (3+cur_ratio)/total_steps
+        update_progress_bar(total_progress, global_ratio * 100)
+        update_progress_bar(current_progress, cur_ratio * 100)
 
     sum_image = aligned_images[0].copy()
-    for image in aligned_images:
+    
+    # Step 5: Stitching images
+    update_step_label("Stitching images")
+    cur_steps_completed = 0
+    for i, image in enumerate(aligned_images):
         mask = ((image > 0) * 255).astype(np.uint8)
         mask = cv2.erode(mask.astype(np.uint8), np.ones((5, 5), np.uint8))[:, :, 0]
         sum_image[mask > 0] = image[mask > 0]
-        
-    return sum_image
+        cur_ratio = i / len(aligned_images)
+        global_ratio = (4+cur_ratio)/total_steps
+        update_progress_bar(total_progress, global_ratio * 100)
+        update_progress_bar(current_progress, cur_ratio * 100)
+
+    if with_gui:
+        root.destroy()
+    return sum_image, final_transforms
+
+
+# Example usage:
+if __name__ == "__main__":
+    image_files = sorted(glob('output/simulated2/*'))
+    images = [cv2.imread(image_file) for image_file in image_files]
+    panorama, transforms = stitch_images(images)
+    plt.imshow(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
+    plt.show()

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from common import *
 from enum import Enum
-from panorama import stitch_images
+from panorama import sift_matching_with_homography, stitch_images
 
 screen_size = (1080, 700)
 window_size = screen_size
@@ -46,27 +46,6 @@ class Anchor:
             color = 'red' if self.moved else 'blue'
             canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill=color)
 
-
-def sift_matching_with_homography(img1, img2):
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
-    sift = cv2.SIFT_create()
-    keypoints1, descriptors1 = sift.detectAndCompute(gray1, None)
-    keypoints2, descriptors2 = sift.detectAndCompute(gray2, None)
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(descriptors1, descriptors2, k=2)
-    good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
-
-    if len(good_matches) > 10:
-        src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 2)
-        dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 2)
-        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        return H
-    else:
-        return None
 
 def calc_transform(shape, scale, rotation, x_offset, y_offset):
     w, h = shape[:2]
@@ -148,6 +127,7 @@ class ImageState(Enum):
     MOVED = 4
     MATCHED = 5
     LOCKED = 6
+    PANORAMA = 7
     
     @staticmethod
     def to_color(state):
@@ -158,7 +138,8 @@ class ImageState(Enum):
             ImageState.LOADED: 'ivory',
             ImageState.MOVED: 'SeaGreen2',
             ImageState.MATCHED: 'RosyBrown1',
-            ImageState.LOCKED: 'forest green'
+            ImageState.LOCKED: 'forest green',
+            ImageState.PANORAMA: 'violet'
         }
         return colors[state]
     
@@ -311,6 +292,20 @@ class ImageObject:
     def __str__(self):
         T = self.relative_transform()
         return f"{self.image_path}, {','.join([str(x) for x in T.flatten().tolist()])}"
+    
+    @staticmethod
+    def create_panorama(image, H = None):
+        o = ImageObject("panorama")
+        o.state = ImageState.PANORAMA
+        o.image = image
+        o.scale_ratio = min(window_size[0] / o.image.shape[1], window_size[1] / o.image.shape[0])
+        o.M_original = np.diag([o.scale_ratio, o.scale_ratio, 1])
+        if H is not None:
+            cur_H = H @ np.linalg.inv(o.M_original)
+            o.initialize_from_homography(cur_H)
+        else:
+            o.M_anchors = np.eye(3)
+        return o
        
 class DebugInfo:
     def __init__(self, root, app):
@@ -588,12 +583,15 @@ class ButtonPanel:
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
         cur = self.app.image
-        if self.app.automatic_matching and prev is not None and (cur.state == ImageState.NOT_LOADED or cur.state == ImageState.LOADED or cur.state == ImageState.MATCHED): 
+        if self.app.automatic_matching and \
+            prev is not None and (cur.state == ImageState.NOT_LOADED or cur.state == ImageState.LOADED or cur.state == ImageState.MATCHED) and \
+            not (prev.state == ImageState.MOVED and cur.state == ImageState.MOVED): 
+ 
             H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
             else:
-                H_rel = cur.M_original @ H_rel @ np.linalg.inv(cur.M_original)
+                H_rel = prev.M_original @ H_rel @ np.linalg.inv(cur.M_original)
                 M_prev = calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset)
                 cur_H = prev.M_anchors @ M_prev @ H_rel
                 cur.initialize_from_homography(cur_H)
@@ -787,13 +785,63 @@ class ImageAlignerApp:
             self.debug_info.show_debug_info()
             
     def create_panorama(self):
-        images = [image.get_image() for image in self.button_panel.images]
-        stitch_image = stitch_images(images)
-        # import matplotlib.pyplot as plt
-        # plt.figure(figsize=(10,10))
-        # plt.imshow(stitch_image)
-        # plt.axis('off')
-        # plt.show()
+        #create panorama
+        selected_index = self.button_panel.current_index
+        good_indices = []
+        good_images = []
+        dst = None
+        i = 0
+        for num, image in enumerate(self.button_panel.images):
+            if image.state == ImageState.PANORAMA:
+                continue
+            if num == selected_index:
+                dst = i
+            good_indices.append(i)
+            i += 1
+            good_images.append(image.get_image())
+        panorama_image, final_transforms = stitch_images(good_images, dst)
+        #calculate it's homography based on selected image
+        H_rel = np.linalg.inv(final_transforms[dst])
+        selected = self.image
+        M_selected = calc_transform([selected.image.shape[1] * selected.scale_ratio, selected.image.shape[0] * selected.scale_ratio], selected.scale, selected.rotation, selected.x_offset, selected.y_offset)
+        cur_H = selected.M_anchors @ M_selected @ selected.M_original @ H_rel 
+        new_pair = ImageObject.create_panorama(panorama_image, cur_H)
+        #add to the list
+        self.button_panel.images.append(new_pair)
+        self.button_panel.image_listbox.delete(0,tk.END)
+        for new_object in self.button_panel.images:
+            normalized_path = os.path.normpath(new_object.image_path)
+            parts = normalized_path.split(os.sep)
+            if len(parts) > 3:
+                parts = parts[-3:]
+            result = os.path.join(*parts)
+            self.button_panel.image_listbox.insert(tk.END, result)
+        self.button_panel.select_image(len(self.button_panel.images)-1)
+        self.button_panel.update_listbox()
+        #update relative transforms
+        if self.automatic_matching:
+            self.toggle_automatic_matching()
+        prev = selected
+        H_prev = prev.M_anchors @calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset)
+        num_good = 0
+        for cur_index, ind in enumerate(good_indices):
+            cur = self.button_panel.images[ind]
+            if final_transforms[cur_index] is None or cur.state == ImageState.PANORAMA:
+                continue
+            num_good += 1
+            if cur.state == ImageState.MOVED or cur.state == ImageState.LOCKED:
+                continue
+            if cur == selected:
+                continue
+            H_rel = np.linalg.inv(final_transforms[dst]) @ final_transforms[cur_index]
+            H_rel = prev.M_original @ H_rel @ np.linalg.inv(cur.M_original)
+            cur_H =  H_prev @ H_rel
+            cur.initialize_from_homography(cur_H)
+            cur.reset_anchors()
+            cur.state = ImageState.MATCHED
+        #success
+        self.clear_messages()
+        self.display_message(f"Successfully created panorama from {num_good} images")
         
 
     # Event Handlers
@@ -885,10 +933,12 @@ class ImageAlignerApp:
         H = sift_matching_with_homography(im2, im1)
         if H is None:
             self.display_message('ERROR: Could not calculate homography')
+            return
         
         self.image.initialize_from_homography( np.linalg.inv(M_global) @ H @ np.linalg.inv(self.image.M_original))
+        self.image.state = ImageState.MOVED
         self.sync_sliders()
-        self.render()
+        self.render() 
 
     def toggle_viewport_mode(self, _ = None):
         self.viewport_mode = not self.viewport_mode
@@ -949,6 +999,8 @@ class ImageAlignerApp:
             self.toggle_homography_mode()
         elif event.char == 'o':
             self.reset_homography()
+        elif event.char == 'p':
+            self.create_panorama()
         elif event.char == 'q':
             self.reset()
         elif event.char == 'm':
@@ -1088,7 +1140,7 @@ def main():
         root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    app.button_panel.load_csv("input/simulated_list.csv")
+    app.button_panel.load_csv("output/simulated_list2.csv")
 
     root.mainloop()
 
