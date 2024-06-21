@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from common import *
 from enum import Enum
-from panorama import sift_matching_with_homography, stitch_images
+from panorama import sift_matching_with_homography, create_cache, stitch_images
 
 screen_size = (1080, 700)
 window_size = screen_size
@@ -161,6 +161,9 @@ class ImageObject:
         self.state_stack = []
         self.current_state_index = -1
         
+        self.derived_images = []
+        self.is_panorama = False
+        
         if not os.path.exists(image_path):
             self.error_message = f"Could not find image: {image_path}"
             return
@@ -259,6 +262,8 @@ class ImageObject:
     def render(self, M_global):
         if self.state == ImageState.NOT_VALID:
             return None
+        if self.is_panorama:
+            self.state = ImageState.PANORAMA
         image = self.get_image()
         if image is None:
             return None
@@ -266,7 +271,20 @@ class ImageObject:
         H = calc_homography(self.anchors)
         
         result = cv2.warpPerspective(image, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
+        self.update_derived_images()
         return result
+    
+    def update_derived_images(self):
+        H_prev = self.M_anchors @ calc_transform([self.image.shape[1] * self.scale_ratio, self.image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset) @ self.M_original
+        for cur, H_rel in self.derived_images:
+            if cur is None:
+                continue
+            if not (cur.state == ImageState.MATCHED or cur.state == ImageState.LOADED):
+                continue
+            cur_H = H_prev @ H_rel @ np.linalg.inv(cur.M_original)
+            cur.initialize_from_homography(cur_H)
+            cur.reset_anchors()
+            cur.state = ImageState.MATCHED
 
     def push_anchor(self, pt):
         min_dist = -1
@@ -296,6 +314,7 @@ class ImageObject:
     @staticmethod
     def create_panorama(image, H = None):
         o = ImageObject("panorama")
+        o.is_panorama = True
         o.state = ImageState.PANORAMA
         o.image = image
         o.scale_ratio = min(window_size[0] / o.image.shape[1], window_size[1] / o.image.shape[0])
@@ -591,9 +610,9 @@ class ButtonPanel:
             if H_rel is None:
                 cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
             else:
-                H_rel = prev.M_original @ H_rel @ np.linalg.inv(cur.M_original)
-                M_prev = calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset)
-                cur_H = prev.M_anchors @ M_prev @ H_rel
+                prev.derived_images.append((cur, H_rel))
+                H_prev = prev.M_anchors @ calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset) @ prev.M_original
+                cur_H =  H_prev @ H_rel @ np.linalg.inv(cur.M_original)
                 cur.initialize_from_homography(cur_H)
             cur.reset_anchors()
             cur.state = ImageState.MATCHED
@@ -651,6 +670,8 @@ class ImageAlignerApp:
         self.draw_grid = False
         self.automatic_matching = False
         self.show_borders = False
+        
+        self.panorama_cache = None
 
         if not 'debug_info' in dir(self):
             self.debug_info = DebugInfo(root, self)
@@ -789,17 +810,29 @@ class ImageAlignerApp:
         selected_index = self.button_panel.current_index
         good_indices = []
         good_images = []
+        good_files = []
         dst = None
         i = 0
         for num, image in enumerate(self.button_panel.images):
-            if image.state == ImageState.PANORAMA:
+            if image.is_panorama:
                 continue
             if num == selected_index:
                 dst = i
             good_indices.append(i)
             i += 1
             good_images.append(image.get_image())
-        panorama_image, final_transforms = stitch_images(good_images, dst)
+            good_files.append(image.image_path)
+        if self.panorama_cache is None:
+            self.panorama_cache = create_cache(good_images)
+            self.panorama_cache["files"] = good_files
+        else:
+            if self.panorama_cache["files"] != good_files:
+                # for n in range(len(good_files)):
+                #     print(good_files[n], self.panorama_cache["files"][n])
+                # TODO: if some images is deleted you can re-use cache
+                self.panorama_cache = create_cache(good_images)
+                self.panorama_cache["files"] = good_files
+        panorama_image, final_transforms = stitch_images(good_images, self.panorama_cache, dst)
         #calculate it's homography based on selected image
         H_rel = np.linalg.inv(final_transforms[dst])
         selected = self.image
@@ -821,21 +854,19 @@ class ImageAlignerApp:
         #update relative transforms
         if self.automatic_matching:
             self.toggle_automatic_matching()
-        prev = selected
-        H_prev = prev.M_anchors @calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset)
+        prev = new_pair 
+        H_prev = prev.M_anchors @ calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset) @ prev.M_original
         num_good = 0
         for cur_index, ind in enumerate(good_indices):
             cur = self.button_panel.images[ind]
-            if final_transforms[cur_index] is None or cur.state == ImageState.PANORAMA:
+            if final_transforms[cur_index] is None or cur.is_panorama:
                 continue
             num_good += 1
+            H_rel = final_transforms[cur_index]
+            prev.derived_images.append([cur, H_rel])
             if cur.state == ImageState.MOVED or cur.state == ImageState.LOCKED:
                 continue
-            if cur == selected:
-                continue
-            H_rel = np.linalg.inv(final_transforms[dst]) @ final_transforms[cur_index]
-            H_rel = prev.M_original @ H_rel @ np.linalg.inv(cur.M_original)
-            cur_H =  H_prev @ H_rel
+            cur_H = H_prev @ H_rel @ np.linalg.inv(cur.M_original)
             cur.initialize_from_homography(cur_H)
             cur.reset_anchors()
             cur.state = ImageState.MATCHED

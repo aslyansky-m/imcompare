@@ -103,8 +103,78 @@ def update_progress_bar(progress_bar, value):
     progress_bar['value'] = value
     progress_bar.update()
 
-def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
+def create_cache(images, with_gui=True, step_penalty = 0.1):
+
+    if with_gui:
+        root = tk.Tk()
+        root.title("Cache Initialization Progress")
+
+        step_label = tk.Label(root, text="Initializing...")
+        step_label.pack(padx=10,pady=10)
+        
+        current_progress = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+        current_progress.pack(padx=10,pady=10)
+        
+        total_progress = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+        total_progress.pack(padx=10,pady=10)
+    else:
+        current_progress = None
+        total_progress = None
+
+    N = len(images)
+    total_steps = 2
+
+    def update_step_label(text):
+        if with_gui:
+            step_label.config(text=text)
+            step_label.update()
+
+    time_ratio = 0.7
+    total_steps = time_ratio*N + (1-time_ratio)*N*(N-1)/2
+    # Step 1: Extracting features
     features = []
+    update_step_label("Extracting features")
+    for i, image in enumerate(images):
+        features.append(get_sift_features(image))
+        cur_ratio = i / N
+        global_ratio = time_ratio*i/total_steps
+        update_progress_bar(total_progress, global_ratio * 100)
+        update_progress_bar(current_progress, cur_ratio * 100)
+
+    inliers = np.zeros([N, N])
+    ratios = np.zeros([N, N])
+    # 2d array of None homographies
+    matrices = [[None for _ in range(N)] for _ in range(N)]
+
+    # Step 2: Matching features
+    update_step_label("Matching features")
+    step = 0
+    for i in range(N):
+        for j in range(i):
+            H, score, inlier = match_sift_features(features[i], features[j])
+            ratios[i, j] = score
+            inliers[i, j] = inlier
+            matrices[i][j] = H
+            matrices[j][i] = np.linalg.inv(H)
+            step += 1
+            cur_ratio = step / (N*(N-1)/2)
+            global_ratio = (time_ratio*N + (1-time_ratio)*step)/total_steps
+            update_progress_bar(current_progress, cur_ratio * 100)
+            update_progress_bar(total_progress, global_ratio * 100)
+
+    metric = np.minimum(ratios, inliers / 100)
+    
+    np.seterr(divide = 'ignore')
+    scores = -np.log(metric + metric.T) + step_penalty
+    np.seterr(divide = 'warn') 
+    
+    cache = dict(N=N, scores=scores, matrices=matrices)
+
+    if with_gui:
+        root.destroy()
+    return cache
+    
+def stitch_images(images, cache, main_image=0, weight_threshold=1.0, with_gui=True):
 
     if with_gui:
         root = tk.Tk()
@@ -123,48 +193,22 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
         total_progress = None
 
     N = len(images)
-    total_steps = 5
+    total_steps = 2
 
     def update_step_label(text):
         if with_gui:
             step_label.config(text=text)
             step_label.update()
+            
+    N2 = cache['N']
+    if N != N2:
+        raise ValueError(f"Number of images in cache ({N2}) does not match number of images provided ({N})")
+    scores = cache['scores']
+    matrices = cache['matrices'] 
 
-    # Step 1: Extracting features
-    update_step_label("Extracting features")
-    for i, image in enumerate(images):
-        features.append(get_sift_features(image))
-        cur_ratio = i / N
-        global_ratio = cur_ratio/total_steps
-        update_progress_bar(total_progress, global_ratio * 100)
-        update_progress_bar(current_progress, cur_ratio * 100)
 
-    inliers = np.zeros([N, N])
-    ratios = np.zeros([N, N])
-
-    # Step 2: Matching features
-    update_step_label("Matching features")
-    step = 0
-    for i in range(N):
-        for j in range(i):
-            H, score, inlier = match_sift_features(features[i], features[j])
-            ratios[i, j] = score
-            inliers[i, j] = inlier
-            step += 1
-            cur_ratio = step / (N*(N-1)/2)
-            global_ratio = (1+cur_ratio)/total_steps
-            update_progress_bar(current_progress, cur_ratio * 100)
-            update_progress_bar(total_progress, global_ratio * 100)
-
-    metric = np.minimum(ratios, inliers / 100)
-    step_penalty = 0.1
-    np.seterr(divide = 'ignore')
-    scores = -np.log(metric + metric.T) + step_penalty
-    np.seterr(divide = 'warn') 
-
-    # Step 3: Computing homographies
+    # Step 1: Computing homographies
     update_step_label("Computing homographies")
-    cur_steps_completed = 0
     homographies = []
     transformed_corners_list = []
     for i in range(N):
@@ -176,7 +220,7 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
                 H = None
             else:
                 for j in range(1, len(path)):
-                    H_rel, _, _ = match_sift_features(features[path[j]], features[path[j - 1]])
+                    H_rel = matrices[path[j]][path[j - 1]]
                     H = H @ H_rel
 
         homographies.append(H)
@@ -221,7 +265,7 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
     final_transforms = []
     aligned_images = []
 
-    # Step 4: Warping images
+    # Step 2: Warping images
     update_step_label("Warping images")
     for i in range(N):
         if homographies[i] is None:
@@ -235,13 +279,13 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
         aligned_images.append(im)
         
         cur_ratio = i / N
-        global_ratio = (3+cur_ratio)/total_steps
-        update_progress_bar(total_progress, global_ratio * 100)
+        global_ratio = (0+cur_ratio)/total_steps
         update_progress_bar(current_progress, cur_ratio * 100)
+        update_progress_bar(total_progress, global_ratio * 100)
 
     sum_image = aligned_images[0].copy()
     
-    # Step 5: Stitching images
+    # Step 3: Stitching images
     update_step_label("Stitching images")
     cur_steps_completed = 0
     for i, image in enumerate(aligned_images):
@@ -249,9 +293,9 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
         mask = cv2.erode(mask.astype(np.uint8), np.ones((5, 5), np.uint8))[:, :, 0]
         sum_image[mask > 0] = image[mask > 0]
         cur_ratio = i / len(aligned_images)
-        global_ratio = (4+cur_ratio)/total_steps
-        update_progress_bar(total_progress, global_ratio * 100)
+        global_ratio = (1+cur_ratio)/total_steps
         update_progress_bar(current_progress, cur_ratio * 100)
+        update_progress_bar(total_progress, global_ratio * 100)
 
     if with_gui:
         root.destroy()
@@ -262,6 +306,7 @@ def stitch_images(images, main_image=0, weight_threshold=1.0, with_gui=True):
 if __name__ == "__main__":
     image_files = sorted(glob('output/simulated2/*'))
     images = [cv2.imread(image_file) for image_file in image_files]
-    panorama, transforms = stitch_images(images)
+    cache = create_cache(images)
+    panorama, transforms = stitch_images(images, cache)
     plt.imshow(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
     plt.show()
