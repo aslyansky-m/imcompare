@@ -122,15 +122,19 @@ def create_cache(images, with_gui=True, step_penalty = 0.1, matching_dist=10):
         total_progress = None
 
     N = len(images)
-    total_steps = 2
 
     def update_step_label(text):
         if with_gui:
             step_label.config(text=text)
             step_label.update()
 
-    time_ratio = 0.7
-    total_steps = time_ratio*N + (1-time_ratio)*N*(N-1)/2
+    time_ratio = 0.8
+    first_steps = N
+    second_steps = 0
+    for i in range(N):
+        for j in range(i):
+            second_steps += (abs(i-j) < matching_dist)
+    total_steps = time_ratio*first_steps + (1-time_ratio)*second_steps
     # Step 1: Extracting features
     features = []
     update_step_label("Extracting features")
@@ -158,8 +162,8 @@ def create_cache(images, with_gui=True, step_penalty = 0.1, matching_dist=10):
                 matrices[i][j] = H
                 matrices[j][i] = np.linalg.inv(H)
             step += 1
-            cur_ratio = step / (N*(N-1)/2)
-            global_ratio = (time_ratio*N + (1-time_ratio)*step)/total_steps
+            cur_ratio = step / second_steps
+            global_ratio = (time_ratio*first_steps + (1-time_ratio)*step)/total_steps
             update_progress_bar(current_progress, cur_ratio * 100)
             update_progress_bar(total_progress, global_ratio * 100)
 

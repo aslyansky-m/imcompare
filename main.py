@@ -138,7 +138,7 @@ class ImageState(Enum):
             ImageState.LOADED: 'ivory',
             ImageState.MOVED: 'SeaGreen2',
             ImageState.MATCHED: 'RosyBrown1',
-            ImageState.LOCKED: 'forest green',
+            ImageState.LOCKED: 'saddle brown',
             ImageState.PANORAMA: 'violet'
         }
         return colors[state]
@@ -700,6 +700,7 @@ class ImageAlignerApp:
         self.root.bind('<Control-z>', self.undo)
         self.root.bind('<Control-Z>', self.redo)
         self.root.bind('<Control-s>', self.button_panel.on_save_image)
+        self.root.bind('<Control-l>', self.toggle_lock_image)
         self.root.bind('<Delete>', self.button_panel.on_delete)
         self.root.bind("<Escape>", self.exit)
         self.root.bind("<Motion>", self.on_mouse_position)
@@ -842,6 +843,7 @@ class ImageAlignerApp:
         #calculate it's homography based on selected image
         H_rel = np.linalg.inv(final_transforms[dst])
         selected = self.image
+        selected.state = ImageState.MATCHED
         M_selected = calc_transform([selected.image.shape[1] * selected.scale_ratio, selected.image.shape[0] * selected.scale_ratio], selected.scale, selected.rotation, selected.x_offset, selected.y_offset)
         cur_H = selected.M_anchors @ M_selected @ selected.M_original @ H_rel 
         new_pair = ImageObject.create_panorama(panorama_image, cur_H)
@@ -862,12 +864,10 @@ class ImageAlignerApp:
             self.toggle_automatic_matching()
         prev = new_pair 
         H_prev = prev.M_anchors @ calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset) @ prev.M_original
-        num_good = 0
         for cur_index, ind in enumerate(good_indices):
             cur = self.button_panel.images[ind]
             if final_transforms[cur_index] is None or cur.is_panorama:
                 continue
-            num_good += 1
             H_rel = final_transforms[cur_index]
             prev.derived_images.append([cur, H_rel])
             if cur.state == ImageState.MOVED or cur.state == ImageState.LOCKED:
@@ -976,6 +976,13 @@ class ImageAlignerApp:
         self.image.state = ImageState.MOVED
         self.sync_sliders()
         self.render() 
+    
+    def toggle_lock_image(self, _ = None):
+        if self.image.state == ImageState.LOCKED:
+            self.image.state = ImageState.MOVED
+        else:
+            self.image.state = ImageState.LOCKED
+        self.button_panel.update_listbox()
 
     def toggle_viewport_mode(self, _ = None):
         self.viewport_mode = not self.viewport_mode
@@ -1079,10 +1086,11 @@ class ImageAlignerApp:
             self.global_scale = max(self.global_scale * (1.05 ** step), 0.1)
             self.zoom_center = np.array([event.x, event.y])
         else:
-            if self.rotation_mode:
-                self.update_rotation(self.image.rotation - step)
-            elif not self.homography_mode:
-                self.update_scale(self.image.scale * (1.02 ** step))
+            if self.image.state != ImageState.LOCKED:
+                if self.rotation_mode:
+                    self.update_rotation(self.image.rotation - step)
+                elif not self.homography_mode:
+                    self.update_scale(self.image.scale * (1.02 ** step))
         self.render()
 
     def on_mouse_press(self, event):
@@ -1093,9 +1101,10 @@ class ImageAlignerApp:
         pt0 = [event.x, event.y]
         pt = apply_homography(np.linalg.inv(self.M_global()), pt0)
         if self.homography_mode and not self.viewport_mode:
-            self.image.push_anchor(pt)
-            self.image.state = ImageState.MOVED
-            self.render()
+            if self.image.state != ImageState.LOCKED:
+                self.image.push_anchor(pt)
+                self.image.state = ImageState.MOVED
+                self.render()
             return
 
         self.move_anchors()
@@ -1115,8 +1124,9 @@ class ImageAlignerApp:
         pt = apply_homography(np.linalg.inv(self.M_global()), pt0)
         
         if self.homography_mode and not self.viewport_mode:
-            self.image.anchors[-1].move(*pt)
-            self.render()
+            if self.image.state != ImageState.LOCKED:
+                self.image.anchors[-1].move(*pt)
+                self.render()
             return
 
         self.move_anchors()
@@ -1126,9 +1136,10 @@ class ImageAlignerApp:
             self.drag_start_x = pt0[0]
             self.drag_start_y = pt0[1]
         else:
-            self.image.x_offset += pt[0] - self.drag_start_x
-            self.image.y_offset += pt[1] - self.drag_start_y
-            self.image.state = ImageState.MOVED
+            if self.image.state != ImageState.LOCKED:
+                self.image.x_offset += pt[0] - self.drag_start_x
+                self.image.y_offset += pt[1] - self.drag_start_y
+                self.image.state = ImageState.MOVED
             self.drag_start_x = pt[0]
             self.drag_start_y = pt[1]
         self.render()
@@ -1177,7 +1188,7 @@ def main():
         root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    app.button_panel.load_csv("output/simulated_list2.csv")
+    app.button_panel.load_csv("input/simulated_list.csv")
 
     root.mainloop()
 
