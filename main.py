@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog
+from tkinter import font
 from PIL import Image, ImageTk
 import pandas as pd
 import time
@@ -18,6 +19,8 @@ from panorama import sift_matching_with_homography, create_cache, stitch_images
 screen_size = (1080, 700)
 window_size = screen_size
 SCREEN_FACTOR = 0.9
+
+
 
 class Anchor:
     def __init__(self, x, y, original=False):
@@ -117,6 +120,14 @@ def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
         y += new_grid_spacing_y
     
     return image
+
+def edge_detection(image, low_threshold=80, high_threshold=150):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 1.4)
+    edges = cv2.Canny(blurred, low_threshold, high_threshold)
+    edges = (cv2.boxFilter(edges, -1, (3, 3)) > 0).astype(np.uint8) * 255
+    output = (np.clip(edges + gray*0.6,0,255)).astype(np.uint8)
+    return output
 
 # enum for state
 class ImageState(Enum):
@@ -310,8 +321,8 @@ class ImageObject:
         return f"{self.image_path}, {','.join([str(x) for x in T.flatten().tolist()])}"
     
     @staticmethod
-    def create_panorama(image, H = None):
-        o = ImageObject("panorama")
+    def create_panorama(image, H = None, name="panorama"):
+        o = ImageObject(name)
         o.is_panorama = True
         o.state = ImageState.PANORAMA
         o.image = image
@@ -383,18 +394,21 @@ class InfoPanel:
 
     def update_position(self, position):
         self.position_box.delete('1.0', tk.END)
-        self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.5f}°, {position[1]:.5f}°]")
         self.position_box.config(state=tk.NORMAL)
+        self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.5f}°, {position[1]:.5f}°]")
+        self.position_box.config(state=tk.DISABLED)
         
     def update_scale(self, scale):
         self.scale_box.delete('1.0', tk.END)
-        self.scale_box.insert(tk.END, f"Scale: [1:{1/scale:.2f}]")
         self.position_box.config(state=tk.NORMAL)
+        self.scale_box.insert(tk.END, f"Scale: [1:{1/scale:.2f}]")
+        self.position_box.config(state=tk.DISABLED)
     
     def update_fps(self, fps):
         self.fps_box.delete('1.0', tk.END)
-        self.fps_box.insert(tk.END, f"FPS: {fps:.2f}")
         self.position_box.config(state=tk.NORMAL)
+        self.fps_box.insert(tk.END, f"FPS: {fps:.2f}")
+        self.position_box.config(state=tk.DISABLED)
         
 class ButtonPanel:
     def __init__(self, root, app):
@@ -538,7 +552,7 @@ class ButtonPanel:
 
     def save_results(self):
         self.app.clear_messages()
-        if not self.output_folder:
+        if True or not self.output_folder:
             self.output_folder = filedialog.askdirectory(title='Select output folder...')
         if not self.output_folder:
             self.app.display_message("ERROR: Please select an output folder")
@@ -558,7 +572,7 @@ class ButtonPanel:
         
     def on_save_image(self, event=None):
         self.app.clear_messages()
-        if not self.output_folder:
+        if True or not self.output_folder:
             self.output_folder = filedialog.askdirectory(title='Select output folder...')
         if not self.output_folder:
             self.app.display_message("ERROR: Please select an output folder")
@@ -632,7 +646,15 @@ class ButtonPanel:
         
     def update_listbox(self):
         for i, image in enumerate(self.images):
-            self.image_listbox.itemconfig(i, bg=ImageState.to_color(image.state))
+            self.image_listbox.itemconfig(i, bg=ImageState.to_color(image.state), fg='black')
+        cur_image = self.app.image
+        if cur_image is None:
+            return
+        for image, _ in cur_image.derived_images:
+            if image is None or image.state == ImageState.MOVED:
+                continue
+            index = self.images.index(image)
+            self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='navy')
 
 
 class ImageAlignerApp:
@@ -664,6 +686,7 @@ class ImageAlignerApp:
         self.debug_mode = False
         self.help_mode = False
         self.contrast_mode = False
+        self.edge_mode = False
         self.homography_mode = False
         self.rotation_mode = False
         self.draw_grid = False
@@ -671,6 +694,7 @@ class ImageAlignerApp:
         self.show_borders = False
         
         self.panorama_cache = None
+        self.num_panoramas = 0
 
         if not 'debug_info' in dir(self):
             self.debug_info = DebugInfo(root, self)
@@ -753,9 +777,13 @@ class ImageAlignerApp:
         if im1 is None:
             im1 = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
 
-        if self.contrast_mode:
-            im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
-            im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+        if self.contrast_mode or self.edge_mode:
+            if self.contrast_mode:
+                im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
+                im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+            else:
+                im1 = edge_detection(im1)
+                im2 = edge_detection(im2)
             if self.toggle:
                 im1, im2 = im2, im1
             blend_image = np.stack([im1, im2, im1], axis=-1)
@@ -827,8 +855,6 @@ class ImageAlignerApp:
             self.panorama_cache["files"] = good_files
         else:
             if self.panorama_cache["files"] != good_files:
-                # for n in range(len(good_files)):
-                #     print(good_files[n], self.panorama_cache["files"][n])
                 # TODO: if some images is deleted you can re-use cache
                 self.panorama_cache = create_cache(good_images)
                 self.panorama_cache["files"] = good_files
@@ -844,7 +870,8 @@ class ImageAlignerApp:
         selected.state = ImageState.MATCHED
         M_selected = calc_transform([selected.image.shape[1] * selected.scale_ratio, selected.image.shape[0] * selected.scale_ratio], selected.scale, selected.rotation, selected.x_offset, selected.y_offset)
         cur_H = selected.M_anchors @ M_selected @ selected.M_original @ H_rel 
-        new_pair = ImageObject.create_panorama(panorama_image, cur_H)
+        self.num_panoramas += 1
+        new_pair = ImageObject.create_panorama(panorama_image, cur_H, name=f"panorama_{self.num_panoramas}")
         #add to the list
         self.button_panel.images.append(new_pair)
         self.button_panel.image_listbox.delete(0,tk.END)
@@ -856,7 +883,6 @@ class ImageAlignerApp:
             result = os.path.join(*parts)
             self.button_panel.image_listbox.insert(tk.END, result)
         self.button_panel.select_image(len(self.button_panel.images)-1)
-        self.button_panel.update_listbox()
         #update relative transforms
         if self.automatic_matching:
             self.toggle_automatic_matching()
@@ -875,6 +901,7 @@ class ImageAlignerApp:
             cur.reset_anchors()
             cur.state = ImageState.MATCHED
         #success
+        self.button_panel.update_listbox()
         self.clear_messages()
         self.display_message(f"Successfully created panorama from {num_good} images")
         
@@ -920,6 +947,8 @@ class ImageAlignerApp:
                         ('<-/->', "Previous/Next image")]
         self.button_panel.help_text_box.delete('1.0', tk.END)
         if self.help_mode:
+            self.clear_messages()
+            self.button_panel.help_text_box.config(state=tk.NORMAL)
             for key, description in descriptions:
                 self.button_panel.help_text_box.insert(tk.END, f"{key}: {description}\n")
             self.button_panel.help_text_box.config(state=tk.DISABLED)
@@ -934,6 +963,12 @@ class ImageAlignerApp:
     def toggle_contrast_mode(self):
         self.contrast_mode = not self.contrast_mode
         self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF", bg=('grey' if self.contrast_mode else 'white'))
+        self.render()
+    
+    def toggle_edge_mode(self):
+        self.edge_mode = not self.edge_mode
+        if self.edge_mode and self.contrast_mode:
+            self.toggle_contrast_mode()
         self.render()
 
     def toggle_images(self, _ = None):
@@ -1035,6 +1070,8 @@ class ImageAlignerApp:
             self.toggle_debug_mode()
         elif event.char == 'c':
             self.toggle_contrast_mode()
+        elif event.char == 'e':
+            self.toggle_edge_mode()
         elif event.char == ' ':
             self.toggle_viewport_mode()
         elif event.char == 'h':
@@ -1156,14 +1193,16 @@ class ImageAlignerApp:
         self.image.reset_anchors()
 
     def clear_messages(self):
-        self.button_panel.help_text_box.delete('1.0', tk.END)
         self.button_panel.help_text_box.config(state=tk.NORMAL)
+        self.button_panel.help_text_box.delete('1.0', tk.END)
+        self.button_panel.help_text_box.config(state=tk.DISABLED)
         
     def display_message(self, message):
         if self.help_mode:
             self.toggle_help_mode()
-        self.button_panel.help_text_box.insert(tk.END, message + '\n')
         self.button_panel.help_text_box.config(state=tk.NORMAL)
+        self.button_panel.help_text_box.insert(tk.END, message + '\n')
+        self.button_panel.help_text_box.config(state=tk.DISABLED)
 
     def exit(self, event=None):
         self.root.quit()
@@ -1186,7 +1225,7 @@ def main():
         root.wm_iconphoto(False, photo)
 
     app = ImageAlignerApp(root)
-    app.button_panel.load_csv("input/simulated_list.csv")
+    app.button_panel.load_csv("output/simulated_list2.csv")
 
     root.mainloop()
 
