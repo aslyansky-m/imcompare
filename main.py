@@ -121,9 +121,11 @@ def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
     
     return image
 
-def edge_detection(image, low_threshold=80, high_threshold=150):
+def edge_detection(image, blur=5, low_threshold=80, high_threshold=150):
+    blur = max(1, blur)
+    blur = blur + 1 if blur % 2 == 0 else blur
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 1.4)
+    blurred = cv2.GaussianBlur(gray, (blur, blur), 1.4)
     edges = cv2.Canny(blurred, low_threshold, high_threshold)
     edges = (cv2.boxFilter(edges, -1, (3, 3)) > 0).astype(np.uint8) * 255
     output = (np.clip(edges + gray*0.6,0,255)).astype(np.uint8)
@@ -393,22 +395,22 @@ class InfoPanel:
         self.update_fps(0) 
 
     def update_position(self, position):
-        self.position_box.delete('1.0', tk.END)
         self.position_box.config(state=tk.NORMAL)
+        self.position_box.delete('1.0', tk.END)
         self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.5f}°, {position[1]:.5f}°]")
         self.position_box.config(state=tk.DISABLED)
         
     def update_scale(self, scale):
+        self.scale_box.config(state=tk.NORMAL)
         self.scale_box.delete('1.0', tk.END)
-        self.position_box.config(state=tk.NORMAL)
         self.scale_box.insert(tk.END, f"Scale: [1:{1/scale:.2f}]")
-        self.position_box.config(state=tk.DISABLED)
+        self.scale_box.config(state=tk.DISABLED)
     
     def update_fps(self, fps):
+        self.fps_box.config(state=tk.NORMAL)
         self.fps_box.delete('1.0', tk.END)
-        self.position_box.config(state=tk.NORMAL)
         self.fps_box.insert(tk.END, f"FPS: {fps:.2f}")
-        self.position_box.config(state=tk.DISABLED)
+        self.fps_box.config(state=tk.DISABLED)
         
 class ButtonPanel:
     def __init__(self, root, app):
@@ -701,7 +703,7 @@ class ImageAlignerApp:
             self.info_panel = InfoPanel(root, self)
             self.button_panel = ButtonPanel(root, self)
             self.canvas = tk.Canvas(self.root, width=window_size[0], height=window_size[1])
-            self.canvas.pack()
+            self.canvas.pack(fill='both', expand=True)
             self.setup_bindings()
         
         if self.image.state == ImageState.NOT_VALID:
@@ -726,6 +728,17 @@ class ImageAlignerApp:
         self.root.bind('<Delete>', self.button_panel.on_delete)
         self.root.bind("<Escape>", self.exit)
         self.root.bind("<Motion>", self.on_mouse_position)
+        self.root.bind("<Configure>", self.on_root_resize)
+        self.canvas.bind("<Configure>", self.on_canvas_resize)
+
+    def on_root_resize(self, event):
+        self.canvas.config(width=event.width, height=event.height)
+    
+    def on_canvas_resize(self, event):
+        global window_size
+        window_size = [event.width, event.height]
+        self.last_map = None
+        self.render(update_state=False)
     
     def upload_image(self):
         self.clear_messages()
@@ -782,8 +795,8 @@ class ImageAlignerApp:
                 im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
                 im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
             else:
-                im1 = edge_detection(im1)
-                im2 = edge_detection(im2)
+                im1 = edge_detection(im1,blur=3)
+                im2 = edge_detection(im2,blur=9)
             if self.toggle:
                 im1, im2 = im2, im1
             blend_image = np.stack([im1, im2, im1], axis=-1)
@@ -962,6 +975,8 @@ class ImageAlignerApp:
 
     def toggle_contrast_mode(self):
         self.contrast_mode = not self.contrast_mode
+        if self.contrast_mode and self.edge_mode:
+            self.toggle_edge_mode()
         self.button_panel.contrast_button.config(text="Contrast Mode:  ON" if self.contrast_mode else "Contrast Mode: OFF", bg=('grey' if self.contrast_mode else 'white'))
         self.render()
     
