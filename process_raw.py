@@ -19,10 +19,6 @@ class ImageProcessorApp:
         self.root = root
         self.configure_widgets()
         
-        if os.path.exists('resources/logo.jpg'):
-            photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
-            self.root.wm_iconphoto(False, photo)
-        
         self.boundaries = None
         self.crop = None
         self.saved_frames = None
@@ -56,13 +52,13 @@ class ImageProcessorApp:
         # Sliders for video processing parameters
         self.param1_label = tk.Label(root, text="CLAHE Clip Limit:")
         self.param1_label.grid(row=2, column=0, padx=10, pady=5, sticky='e')
-        self.param1_slider = tk.Scale(root, from_=0.1, to=10, resolution=0.1, orient='horizontal', command=self.update_image)
+        self.param1_slider = tk.Scale(root, from_=0.1, to=20, resolution=0.1, orient='horizontal', command=self.update_image)
         self.param1_slider.set(2)
         self.param1_slider.grid(row=2, column=1, padx=10, pady=5, columnspan=2, sticky='w')
 
         self.param2_label = tk.Label(root, text="Frame Step:")
         self.param2_label.grid(row=3, column=0, padx=10, pady=5, sticky='e')
-        self.param2_slider = tk.Scale(root, from_=1, to=25, orient='horizontal')
+        self.param2_slider = tk.Scale(root, from_=1, to=50, orient='horizontal')
         self.param2_slider.set(5)
         self.param2_slider.grid(row=3, column=1, padx=10, pady=5, columnspan=2, sticky='w')
 
@@ -129,10 +125,13 @@ class ImageProcessorApp:
     def browse_image_folder(self):
         folder = filedialog.askdirectory()
         if folder:
-            if all(file.endswith(('.png', '.jpg', '.jpeg')) for file in os.listdir(folder)):
+            print(folder)
+            if all(file.endswith(('.png', '.jpg', '.jpeg', '.tif')) for file in os.listdir(folder)):
                 self.image_folder_path.set(folder)
             else:
                 messagebox.showerror("Error", "Selected folder does not contain valid image files.")
+                return
+        self.update_image(self.param1_slider.get())
 
     def browse_geotif(self):
         file = filedialog.askopenfilename(filetypes=[("GeoTIFF files", "*.tif")])
@@ -145,22 +144,6 @@ class ImageProcessorApp:
         if folder:
             self.output_folder_path.set(folder)
 
-    def show_geotif_ranges(self, geotif_file):
-        # Simulated range for center coordinates and radius (example values)
-        try:
-            map_object = rasterio.open(geotif_file)
-        except:
-            messagebox.showerror("Error", f"Invalid GeoTIFF file selected: {geotif_file}")
-            return
-        
-        gps0 = pix2gps(map_object, [0,map_object.height])
-        gps1 = pix2gps(map_object, [map_object.width, 0])
-        ranges = gps2enu(map_object, pix2gps(map_object, [map_object.width,0]))[:2]
-        max_range = max(ranges)
-        self.boundaries = [gps0, gps1, max_range]
-
-        self.range_label.config(text=f"Latitude range:  ({gps0[0]:.6f},{gps1[0]:.6f}) \nLongitude range: ({gps0[1]:.6f},{gps1[1]:.6f}) \nRadius range: (0,{max_range:.1f})")
-
     def run_processing(self):
         # Validation checks
         if not os.path.isdir(self.image_folder_path.get()):
@@ -168,9 +151,6 @@ class ImageProcessorApp:
             return
         if not os.path.isfile(self.geotif_path.get()) or not self.geotif_path.get().endswith('.tif'):
             messagebox.showerror("Error", "Invalid GeoTIFF file selected.")
-            return
-        if not os.path.isdir(self.output_folder_path.get()):
-            messagebox.showerror("Error", "Invalid output folder selected.")
             return
 
         try:
@@ -187,6 +167,9 @@ class ImageProcessorApp:
         # Update image based on the slider's current value
         value = float(value)
         image_folder = self.image_folder_path.get()
+        
+        if not image_folder:
+            return
         images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
         
         if not images:
@@ -209,12 +192,15 @@ class ImageProcessorApp:
         canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack()
-        
 
     def process_images(self):
         image_folder = self.image_folder_path.get()
+        if not image_folder:
+            return
         images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        total_steps = len(images) + 1  # Adding 1 for cropping step
+        if not images:
+            return
+        total_steps = len(images)  # Adding 1 for cropping step
 
         means_before = []
         means_after = []
@@ -240,6 +226,7 @@ class ImageProcessorApp:
             # time.sleep(0.1)  # Simulate processing time
 
         self.current_step_label.config(text="Processing completed.")
+        self.current_progress['value'] = 100
         self.display_results(means_before, means_after, frame_step)
 
     def display_results(self, means_before, means_after, frame_step):
@@ -262,6 +249,10 @@ class ImageProcessorApp:
         canvas.get_tk_widget().pack()
     
     def save_frames(self):
+        if not os.path.isdir(self.output_folder_path.get()):
+            messagebox.showerror("Error", "Invalid output folder selected.")
+            return
+        
         image_folder = self.image_folder_path.get()
         images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
         step = self.param2_slider.get()
@@ -281,6 +272,29 @@ class ImageProcessorApp:
         self.current_step_label.config(text=f"Frames Saved.")
         self.current_progress['value'] = 100
         self.saved_frames = saved_frames
+        
+    def show_geotif_ranges(self, geotif_file):
+        # Simulated range for center coordinates and radius (example values)
+        try:
+            map_object = rasterio.open(geotif_file)
+        except:
+            messagebox.showerror("Error", f"Invalid GeoTIFF file selected: {geotif_file}")
+            return
+        
+        gps0 = pix2gps(map_object, [0,map_object.height])
+        gps1 = pix2gps(map_object, [map_object.width, 0])
+        ranges = gps2enu(map_object, pix2gps(map_object, [map_object.width,0]))[:2]
+        max_range = max(ranges)
+        self.boundaries = [gps0, gps1, max_range]
+
+        self.range_label.config(text=f"Latitude range:  ({gps0[0]:.6f},{gps1[0]:.6f}) \nLongitude range: ({gps0[1]:.6f},{gps1[1]:.6f}) \nRadius range: (0,{max_range:.1f})")
+        
+        self.center_coord_lat.delete(0, tk.END)
+        self.center_coord_long.delete(0, tk.END)
+        self.radius_entry.delete(0, tk.END)
+        self.center_coord_lat.insert(tk.INSERT, f"{((gps0[0] + gps1[0])/2):.6f}")
+        self.center_coord_long.insert(tk.INSERT, f"{((gps0[1] + gps1[1])/2):.6f}")
+        self.radius_entry.insert(tk.INSERT, "500.0")
     
     def display_map(self):
         
@@ -338,7 +352,7 @@ class ImageProcessorApp:
         # Plotting the selected region
         fig, ax = plt.subplots()
         ax.imshow(selected_region.transpose(1, 2, 0)) 
-        ax.set_title("Selected Region")
+        ax.set_title("Selected Map Region")
         ax.axis('off')
         
         canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
@@ -346,6 +360,9 @@ class ImageProcessorApp:
         canvas.get_tk_widget().pack()
     
     def save_map(self):
+        if not os.path.isdir(self.output_folder_path.get()):
+            messagebox.showerror("Error", "Invalid output folder selected.")
+            return
         
         if self.crop is None:
             self.display_map()
@@ -444,5 +461,8 @@ class ImageProcessorApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = ImageProcessorApp(root)
-    app.test_inputs()
+    if os.path.exists('resources/logo.jpg'):
+        photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
+        root.wm_iconphoto(False, photo)
+    # app.test_inputs()
     root.mainloop()

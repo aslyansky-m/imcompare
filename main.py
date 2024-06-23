@@ -15,8 +15,8 @@ from pathlib import Path
 
 from image import *
 from common import *
+# from process_raw import ImageProcessorApp
 from panorama import sift_matching_with_homography, create_cache, stitch_images
-
 
 class DebugInfo:
     def __init__(self, root, app):
@@ -78,7 +78,7 @@ class InfoPanel:
     def update_position(self, position):
         self.position_box.config(state=tk.NORMAL)
         self.position_box.delete('1.0', tk.END)
-        self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.5f}°, {position[1]:.5f}°]")
+        self.position_box.insert(tk.END, f"Coordinate: [{position[0]:.6f}°, {position[1]:.6f}°]")
         self.position_box.config(state=tk.DISABLED)
         
     def update_scale(self, scale):
@@ -133,6 +133,7 @@ class ButtonPanel:
         self.help_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.help_text_box['yscrollcommand'] = self.help_scrollbar.set
         
+        self.raw_button = tk.Button(self.frame, text="Raw Processing", command=self.run_raw_processing, bg='white')
         self.upload_button = tk.Button(self.frame, text="Upload Image", command=self.app.upload_image,bg='white')
         self.load_csv_button = tk.Button(self.frame, text="Load CSV", command=self.load_csv,bg='white')
         self.save_image_button = tk.Button(self.frame, text="Save Image", command=self.on_save_image,bg='white')
@@ -162,6 +163,8 @@ class ButtonPanel:
             #self.debug_button,
             self.help_button,
             self.help_frame,
+            
+            self.raw_button,
             self.upload_button,
             self.load_csv_button,
             self.save_image_button,
@@ -338,6 +341,15 @@ class ButtonPanel:
                 continue
             index = self.images.index(image)
             self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='navy')
+    
+    def run_raw_processing(self):
+        pass
+        # try:
+        #     root = tk.Tk()
+        #     app = ImageProcessorApp(root)
+        #     root.mainloop()
+        # except Exception as e:
+        #     print(e)
 
 
 class ImageAlignerApp:
@@ -766,6 +778,11 @@ class ImageAlignerApp:
         pos = self.map.pix2gps(pos)
         self.info_panel.update_position(pos)
     
+    def print_coords(self):
+        text = self.info_panel.position_box.get("1.0",tk.END)
+        self.clear_messages()
+        self.display_message(text)
+    
     def on_key_press(self, event):
         if event.char == 'r':
             self.update_rotation(self.image.rotation + 90)
@@ -787,6 +804,8 @@ class ImageAlignerApp:
             self.reset_homography()
         elif event.char == 'p':
             self.create_panorama()
+        elif event.char == 's':
+            self.print_coords()
         elif event.char == 'q':
             self.reset()
         elif event.char == 'm':
