@@ -11,14 +11,22 @@ from rasterio.windows import Window
 from common import gps2enu, enu2gps, gps2pix, pix2gps
 import subprocess
 import shutil
+import pandas as pd
+from PIL import Image, ImageTk
 
 class ImageProcessorApp:
     def __init__(self, root):
         self.root = root
         self.configure_widgets()
         
+        if os.path.exists('resources/logo.jpg'):
+            photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
+            self.root.wm_iconphoto(False, photo)
+        
         self.boundaries = None
         self.crop = None
+        self.saved_frames = None
+        self.saved_map = None
 
     def configure_widgets(self):
         root = self.root
@@ -48,7 +56,7 @@ class ImageProcessorApp:
         # Sliders for video processing parameters
         self.param1_label = tk.Label(root, text="CLAHE Clip Limit:")
         self.param1_label.grid(row=2, column=0, padx=10, pady=5, sticky='e')
-        self.param1_slider = tk.Scale(root, from_=0.1, to=10, resolution=0.1, orient='horizontal')
+        self.param1_slider = tk.Scale(root, from_=0.1, to=10, resolution=0.1, orient='horizontal', command=self.update_image)
         self.param1_slider.set(2)
         self.param1_slider.grid(row=2, column=1, padx=10, pady=5, columnspan=2, sticky='w')
 
@@ -84,18 +92,25 @@ class ImageProcessorApp:
         self.output_folder_button = tk.Button(root, text="Browse", command=self.browse_output_folder)
         self.output_folder_button.grid(row=7, column=2, padx=10, pady=5)
 
-        # Run and Save buttons
-        self.run_button = tk.Button(root, text="Run Processing", command=self.run_processing)
-        self.run_button.grid(row=8, column=0, pady=20, sticky='ew', padx=15)
+        # Frame to contain all buttons
+        button_frame = tk.Frame(root)
+        button_frame.grid(row=8, column=0, columnspan=5, pady=20, padx=10)
         
-        self.save_button = tk.Button(root, text="Save Frames", command=self.save_frames)
-        self.save_button.grid(row=8, column=1, pady=20, sticky='ew', padx=15)
+        # Buttons
+        self.run_button = tk.Button(button_frame, text="Run Processing", command=self.run_processing)
+        self.run_button.grid(row=0, column=0, padx=5, sticky='ew')
         
-        self.display_button = tk.Button(root, text="Display Map", command=self.display_map)
-        self.display_button.grid(row=8, column=2, pady=20, sticky='ew', padx=15)
+        self.save_button = tk.Button(button_frame, text="Save Frames", command=self.save_frames)
+        self.save_button.grid(row=0, column=1, padx=5, sticky='ew')
         
-        self.map_button = tk.Button(root, text="Save Map", command=self.save_map)
-        self.map_button.grid(row=8, column=3, pady=20, sticky='ew', padx=15)
+        self.display_button = tk.Button(button_frame, text="Display Map", command=self.display_map)
+        self.display_button.grid(row=0, column=2, padx=5, sticky='ew')
+        
+        self.map_button = tk.Button(button_frame, text="Save Map", command=self.save_map)
+        self.map_button.grid(row=0, column=3, padx=5, sticky='ew')
+        
+        self.list_button = tk.Button(button_frame, text="Generate List", command=self.generate_list)
+        self.list_button.grid(row=0, column=4, padx=5, sticky='ew')
 
         # Progress bars
         self.current_step_label = tk.Label(root, text="Current Step:")
@@ -105,6 +120,7 @@ class ImageProcessorApp:
 
         self.plot_frame = tk.Frame(root)
         self.plot_frame.grid(row=10, column=0, columnspan=3, pady=10)
+        
 
     def on_closing(self,_=None):
         self.root.quit()
@@ -166,6 +182,34 @@ class ImageProcessorApp:
             return
 
         self.process_images()
+    
+    def update_image(self, value):
+        # Update image based on the slider's current value
+        value = float(value)
+        image_folder = self.image_folder_path.get()
+        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        
+        if not images:
+            return
+        
+        image = cv2.imread(os.path.join(image_folder, images[0]), cv2.IMREAD_GRAYSCALE)
+        new_image = cv2.createCLAHE(clipLimit=value).apply(image)
+        
+        fig, ax = plt.subplots(1,2)
+        ax[0].imshow(image, cmap='gray')
+        ax[1].imshow(new_image, cmap='gray')
+        ax[0].set_title("Before CLAHE")
+        ax[1].set_title("After CLAHE")
+        ax[0].axis('off')   
+        ax[1].axis('off')
+
+        for widget in self.plot_frame.winfo_children():
+            widget.destroy()  # Clear previous plot if any
+
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack()
+        
 
     def process_images(self):
         image_folder = self.image_folder_path.get()
@@ -176,6 +220,8 @@ class ImageProcessorApp:
         means_after = []
         frame_step = self.param2_slider.get()
         clip_limit = self.param1_slider.get()
+        
+        clahe = cv2.createCLAHE(clipLimit=clip_limit)
 
         for i, image_file in enumerate(images, start=1):
             self.current_step_label.config(text=f"Processing {image_file}...")
@@ -187,7 +233,7 @@ class ImageProcessorApp:
             image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             means_before.append(np.mean(image))
 
-            clahe = cv2.createCLAHE(clipLimit=clip_limit)
+            
             clahe_image = clahe.apply(image)
             means_after.append(np.mean(clahe_image))
 
@@ -206,7 +252,7 @@ class ImageProcessorApp:
         ax[0].scatter(range(0, len(means_before), frame_step), [means_before[i] for i in range(0, len(means_before), frame_step)], color='red')
         ax[1].scatter(range(0, len(means_after), frame_step), [means_after[i] for i in range(0, len(means_after), frame_step)], color='blue')
         ax[0].set_title("Before CLAHE")
-        ax[0].set_title("After CLAHE")
+        ax[1].set_title("After CLAHE")
 
         for widget in self.plot_frame.winfo_children():
             widget.destroy()  # Clear previous plot if any
@@ -214,6 +260,27 @@ class ImageProcessorApp:
         canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack()
+    
+    def save_frames(self):
+        image_folder = self.image_folder_path.get()
+        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        step = self.param2_slider.get()
+        selected_images = images[::step]
+        total_steps = len(selected_images) + 1  # Adding 1 for cropping step
+
+        saved_frames = []
+        for i, image_file in enumerate(selected_images, start=1):
+            self.current_step_label.config(text=f"Saving {image_file}...")
+            self.current_progress['value'] = (i / total_steps) * 100
+            self.root.update_idletasks()
+            
+            saved_frames.append(image_file)
+
+            # Simulate saving process (replace with actual saving code)
+            time.sleep(0.01)  # Simulate saving time
+        self.current_step_label.config(text=f"Frames Saved.")
+        self.current_progress['value'] = 100
+        self.saved_frames = saved_frames
     
     def display_map(self):
         
@@ -341,32 +408,29 @@ class ImageProcessorApp:
             time.sleep(0.1)
         
         os.remove(f'{map_fld}/cropped.tif')
+        self.saved_map = f'{map_fld}/{filename}_{resize_factors[0]:02d}x.tif'
         
-        self.current_step_label.config(text=f"Finished")
+        self.current_step_label.config(text=f"Maps Saved.")
         self.current_progress['value'] = 100
         self.root.update_idletasks()
-
-    def save_frames(self):
-        image_folder = self.image_folder_path.get()
-        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        step = self.param2_slider.get()
-        selected_images = images[::step]
-        total_steps = len(selected_images) + 1  # Adding 1 for cropping step
-
-        for i, image_file in enumerate(selected_images, start=1):
-            self.current_step_label.config(text=f"Saving {image_file}...")
-            self.current_progress['value'] = (i / total_steps) * 100
-            self.root.update_idletasks()
-
-            # Simulate saving process (replace with actual saving code)
-            time.sleep(0.01)  # Simulate saving time
-
-        messagebox.showinfo("Success", "Results saved successfully!")
-        self.reset_progress()
-
-    def reset_progress(self):
-        self.current_progress['value'] = 0
-        self.current_step_label.config(text="Current Step:")
+    
+    def generate_list(self):
+        if self.saved_frames is None:
+            messagebox.showerror("Error", "No frames saved.")
+            return
+        
+        if self.saved_map is None:
+            messagebox.showerror("Error", "No map saved.")
+            return
+        
+        # save pandas dataframe to csv with fields images,map_path
+        saved_frames = [os.path.abspath(f) for f in self.saved_frames]
+        saved_map = os.path.abspath(self.saved_map)
+        df = pd.DataFrame({'images': saved_frames, 'map_path': [saved_map]*len(saved_frames)})
+        output_file = os.path.abspath(f'{self.output_folder_path.get()}/output_list.csv')
+        df.to_csv(output_file, index=False)
+        
+        messagebox.showinfo("Success", f"List generated successfully:\n {output_file}")
 
     def test_inputs(self):
         self.image_folder_path.set("output/simulated4")
