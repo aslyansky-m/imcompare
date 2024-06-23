@@ -14,6 +14,30 @@ import shutil
 import pandas as pd
 from PIL import Image, ImageTk
 
+def track_frames(im0, im1):
+    detection_params = dict(maxCorners=1000,qualityLevel=0.0001,minDistance=12,blockSize=11)
+    tracking_params = dict(winSize=(8, 8),maxLevel=4,criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.03),minEigThreshold=5e-5)
+    bidirectional_thresh=2.0
+    affine_params = dict(ransacReprojThreshold=2,maxIters=2000,confidence=0.999,refineIters=10)
+    
+    p0 = cv2.goodFeaturesToTrack(im0, mask=None, **detection_params)
+
+    p1, st1, err1 = cv2.calcOpticalFlowPyrLK(im0, im1, p0, None, **tracking_params)
+    if bidirectional_thresh > 0:
+        p2, st2, err2 = cv2.calcOpticalFlowPyrLK(im1, im0, p1, None, **tracking_params)
+        proj_err = np.linalg.norm(np.squeeze(p2 - p0), axis=1)
+        st = np.squeeze(st1 * st2) * (proj_err < bidirectional_thresh).astype(np.uint8)
+    else:
+        st = np.squeeze(st1)
+    p0 = np.squeeze(p0)[st == 1]
+    p1 = np.squeeze(p1)[st == 1]
+    
+    if len(p0) > 0:
+        H, mask = cv2.estimateAffinePartial2D(p0, p1, **affine_params)
+    else:
+        H = np.eye(3)
+    return H
+
 class ImageProcessorApp:
     def __init__(self, root):
         self.root = root
@@ -117,20 +141,20 @@ class ImageProcessorApp:
         self.plot_frame = tk.Frame(root)
         self.plot_frame.grid(row=10, column=0, columnspan=3, pady=10)
         
-
     def on_closing(self,_=None):
-        self.root.quit()
         self.root.destroy()
 
     def browse_image_folder(self):
         folder = filedialog.askdirectory()
         if folder:
-            print(folder)
             if all(file.endswith(('.png', '.jpg', '.jpeg', '.tif')) for file in os.listdir(folder)):
                 self.image_folder_path.set(folder)
             else:
                 messagebox.showerror("Error", "Selected folder does not contain valid image files.")
                 return
+        else:
+            messagebox.showerror("Error", "Selected folder does not exist.")
+            return
         self.update_image(self.param1_slider.get())
 
     def browse_geotif(self):
@@ -208,6 +232,8 @@ class ImageProcessorApp:
         clip_limit = self.param1_slider.get()
         
         clahe = cv2.createCLAHE(clipLimit=clip_limit)
+        
+        Hs = [np.eye(3)]
 
         for i, image_file in enumerate(images, start=1):
             self.current_step_label.config(text=f"Processing {image_file}...")
@@ -314,9 +340,14 @@ class ImageProcessorApp:
             pix = gps2pix(map_object, gps)
             return pix, gps
         
-        lat = float(self.center_coord_lat.get())
-        lon = float(self.center_coord_long.get())
-        radius = float(self.radius_entry.get())
+        try:
+            lat = float(self.center_coord_lat.get())
+            lon = float(self.center_coord_long.get())
+            radius = float(self.radius_entry.get())
+        except:
+            messagebox.showerror("Error", "Invalid values for coordinates or radius.")
+            return
+        
         gps = [lat, lon]
         [gps0, gps1, max_range] = self.boundaries
         if lat < gps0[0] or lat > gps1[0]:

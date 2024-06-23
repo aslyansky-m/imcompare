@@ -15,7 +15,7 @@ from pathlib import Path
 
 from image import *
 from common import *
-# from process_raw import ImageProcessorApp
+from process_raw import ImageProcessorApp
 from panorama import sift_matching_with_homography, create_cache, stitch_images
 
 class DebugInfo:
@@ -343,13 +343,11 @@ class ButtonPanel:
             self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='navy')
     
     def run_raw_processing(self):
-        pass
-        # try:
-        #     root = tk.Tk()
-        #     app = ImageProcessorApp(root)
-        #     root.mainloop()
-        # except Exception as e:
-        #     print(e)
+        try:
+            root = tk.Toplevel()
+            app = ImageProcessorApp(root)
+        except Exception as e:
+            print(e)
 
 
 class ImageAlignerApp:
@@ -552,6 +550,10 @@ class ImageAlignerApp:
             
     def create_panorama(self):
         #create panorama
+        if self.image.is_panorama:
+            self.clear_messages()
+            self.display_message("ERROR: Cannot create a panorama from another one")
+            return
         selected_index = self.button_panel.current_index
         good_indices = []
         good_images = []
@@ -649,22 +651,37 @@ class ImageAlignerApp:
     def toggle_help_mode(self):
         self.help_mode = not self.help_mode
         self.button_panel.help_button.config(text="Help:  ON" if self.help_mode else "Help: OFF", bg=('grey' if self.help_mode else 'white'))
-        descriptions = [('r', "Rotate by 90 degrees"),
-                        ('+', "Zoom in 10%"),
-                        ('-', "Zoom out 10%"),
-                        ('d', "Debug mode"),
-                        ('c', "Contrast mode"),
-                        ('t/right click', "Toggle images"),
-                        ('h', "Homography mode"),
-                        ('a', "Automatic homography"),
-                        ('o', "Reset homography"),
-                        ('space', "Change field of view"),
-                        ('mouse wheel', "Zoom in/out"),
-                        ('middle click', "Toggle rotation mode"),
-                        ('<-/->', "Previous/Next image")]
-        self.button_panel.help_text_box.delete('1.0', tk.END)
+        descriptions = [
+            ('r', "Rotate by 90 degrees"),
+            ('+', "Zoom in 10%"),
+            ('-', "Zoom out 10%"),
+            ('d', "Debug mode"),
+            ('c', "Contrast mode"),
+            ('e', "Edge detection mode"),
+            ('space', "Change field of view"),
+            ('h', "Homography mode"),
+            ('o', "Reset homography"),
+            ('p', "Create panorama"),
+            ('s', "Print coordinates"),
+            ('q', "Reset settings"),
+            ('m', "Automatic matching"),
+            ('g', "Toggle grid visibility"),
+            ('b', "Toggle borders visibility"),
+            ('a', "Run image matching"),
+            ('->', "Next image"),
+            ('<-', "Previous image"),
+            ('Control-z', "Undo last action"),
+            ('Control-Shift-z', "Redo last undone action"),
+            ('Control-s', "Save the current image"),
+            ('Control-l', "Toggle image lock"),
+            ('Delete', "Delete the current selection"),
+            ('Mouse Wheel', "Zoom in/out"),
+            ('Middle Click', "Toggle rotation mode"),
+            ('Right Click', "Toggle images"),
+            ('Escape', "Exit the application")
+        ]
+        self.clear_messages()
         if self.help_mode:
-            self.clear_messages()
             self.button_panel.help_text_box.config(state=tk.NORMAL)
             for key, description in descriptions:
                 self.button_panel.help_text_box.insert(tk.END, f"{key}: {description}\n")
