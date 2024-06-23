@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+test.py
 
 # Ignore build output directories
 /build/

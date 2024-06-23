@@ -12,331 +12,12 @@ from PIL import Image, ImageTk
 import pandas as pd
 import time
 from pathlib import Path
+
+from image import *
 from common import *
-from enum import Enum
 from panorama import sift_matching_with_homography, create_cache, stitch_images
 
-screen_size = (1080, 700)
-window_size = screen_size
-SCREEN_FACTOR = 0.9
 
-
-
-class Anchor:
-    def __init__(self, x, y, original=False):
-        self.pos0 = (x, y)
-        self.pos = (x, y)
-        self.original = original
-        self.moved = False
-    
-    def move(self, x, y):
-        self.pos = (x, y)
-        self.moved = True
-    
-    def reset(self):  
-        self.moved = False
-        self.pos0 = self.pos
-        
-    def plot(self, canvas, M_global):
-        r = 4
-        pos_t = apply_homography(M_global, self.pos).astype(int)
-        pos0_t = apply_homography(M_global, self.pos0).astype(int)
-        if self.original:
-            canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill='green')
-        else:
-            r0 = 3
-            canvas.create_oval(pos0_t[0] - r0, pos0_t[1] - r0, pos0_t[0] + r0, pos0_t[1] + r0, fill='yellow')
-            color = 'red' if self.moved else 'blue'
-            canvas.create_oval(pos_t[0] - r, pos_t[1] - r, pos_t[0] + r, pos_t[1] + r, fill=color)
-
-
-def calc_transform(shape, scale, rotation, x_offset, y_offset):
-    w, h = shape[:2]
-    M1 = cv2.getRotationMatrix2D((w/2, h/2), rotation, scale)
-    M2 = np.float32([[1, 0, x_offset], [0, 1, y_offset]])
-    M1 = np.vstack([M1, [0, 0, 1]])
-    M2 = np.vstack([M2, [0, 0, 1]])
-    M = np.dot(M2,M1)
-    return M
-
-def calc_homography(anchors):
-    if len(anchors) < 4:
-        return np.eye(3)
-    pts0 = np.array([anchor.pos0 for anchor in anchors], dtype=np.float32)
-    pts1 = np.array([anchor.pos for anchor in anchors], dtype=np.float32)
-    H, _ = cv2.findHomography(pts0, pts1)
-    if H is None:
-        return np.eye(3)
-    return H
-
-def decompose_homography(H, image_size, scale_ratio):
-    h, w = image_size[:2]
-    corners = np.array([[0, 0], [w-1, 0], [w-1, h-1], [0, h-1]], dtype=np.float32).reshape(-1, 1, 2)
-    transformed_corners = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
-    M, _ = cv2.estimateAffinePartial2D(corners.reshape(-1, 2), transformed_corners)
-
-    scale = np.sqrt(np.linalg.det(M[:2,:2]))
-    rotation = -np.rad2deg(np.arctan2(M[1, 0], M[0, 0]))
-
-    M2 = calc_transform((w*scale_ratio,h*scale_ratio),scale,rotation,0,0)
-    M1 = np.vstack([M, [0, 0, 1]])
-    M3 = M1@np.linalg.inv(M2)
-    translation = M3[:2, 2]
-
-    H1 = calc_transform((w*scale_ratio,h*scale_ratio), scale, rotation, translation[0], translation[1])
-    H2 = H@np.linalg.inv(H1)
-    
-    return translation, rotation, scale, H2
-
-def apply_homography(H, point):
-    pt = np.array([point[0], point[1], 1])
-    pt = H @ pt
-    pt = pt[:2]/pt[2]
-    return pt
-
-def draw_grid(image, H, grid_spacing=100, color=(192, 192, 192), thickness=1):
-    height, width = image.shape[:2]
-    
-    new_grid_spacing_x = H[0, 0] * grid_spacing
-    new_grid_spacing_y = H[1, 1] * grid_spacing
-    
-    max_diff = 5.0
-    factor = np.ceil(np.log(grid_spacing/new_grid_spacing_x)/np.log(max_diff))
-    new_grid_spacing_x *= max_diff**factor
-    new_grid_spacing_y *= max_diff**factor
-    new_start_x = H[0, 2]
-    new_start_y = H[1, 2]
-    new_start_x -= np.round(new_start_x / new_grid_spacing_x)*new_grid_spacing_x
-    new_start_y -= np.round(new_start_y / new_grid_spacing_y)*new_grid_spacing_y
-
-    x = new_start_x
-    while x < width:
-        cv2.line(image, (int(x), 0), (int(x), height), color, thickness)
-        x += new_grid_spacing_x
-    
-    y = new_start_y
-    while y < height:
-        cv2.line(image, (0, int(y)), (width, int(y)), color, thickness)
-        y += new_grid_spacing_y
-    
-    return image
-
-def edge_detection(image, blur=5, low_threshold=80, high_threshold=150):
-    blur = max(1, blur)
-    blur = blur + 1 if blur % 2 == 0 else blur
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (blur, blur), 1.4)
-    edges = cv2.Canny(blurred, low_threshold, high_threshold)
-    edges = (cv2.boxFilter(edges, -1, (3, 3)) > 0).astype(np.uint8) * 255
-    output = (np.clip(edges + gray*0.6,0,255)).astype(np.uint8)
-    return output
-
-# enum for state
-class ImageState(Enum):
-    NOT_VALID = 0
-    NOT_LOADED = 1
-    INITIALIZED = 2
-    LOADED = 3
-    MOVED = 4
-    MATCHED = 5
-    LOCKED = 6
-    PANORAMA = 7
-    
-    @staticmethod
-    def to_color(state):
-        colors = {
-            ImageState.NOT_VALID: 'red',
-            ImageState.NOT_LOADED: 'white',
-            ImageState.INITIALIZED: 'Slategray1',
-            ImageState.LOADED: 'ivory',
-            ImageState.MOVED: 'SeaGreen2',
-            ImageState.MATCHED: 'RosyBrown1',
-            ImageState.LOCKED: 'saddle brown',
-            ImageState.PANORAMA: 'violet'
-        }
-        return colors[state]
-    
-class ImageObject:
-    def __init__(self, image_path, M_anchors = None):
-        self.image_path = image_path
-        self.state = ImageState.NOT_VALID
-        self.scale = 1.0
-        self.rotation = 0
-        self.x_offset = 0
-        self.y_offset = 0
-        self.anchors = []
-        self.scale_ratio = 1.0
-        self.M_anchors = M_anchors
-        self.M_original = np.eye(3)
-        self.error_message = ''
-        self.image = None
-
-        self.state_stack = []
-        self.current_state_index = -1
-        
-        self.derived_images = []
-        self.is_panorama = False
-        
-        if not os.path.exists(image_path):
-            self.error_message = f"Could not find image: {image_path}"
-            return
-        
-        if M_anchors is None:
-            self.state = ImageState.NOT_LOADED
-        else:
-            self.state = ImageState.INITIALIZED
-
-        
-    def get_image(self):
-        if self.state == ImageState.NOT_VALID:
-            return None
-        if self.state == ImageState.NOT_LOADED or self.image is None:
-            try:
-                self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
-                self.scale_ratio = min(window_size[0] / self.image.shape[1], window_size[1] / self.image.shape[0])
-                self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-                if self.M_anchors is not None:
-                    H = self.M_anchors @ np.linalg.inv(self.M_original)
-                    self.initialize_from_homography(H)
-                    self.state = ImageState.MOVED
-                else:
-                    self.M_anchors = np.eye(3)
-                    self.state = ImageState.LOADED
-                    
-                self.save_state()
-            except Exception as e:
-                print(e)
-                return None
-            
-        return self.image
-
-    def save_state(self):
-        if self.image is None:
-            return
-        current_state = (self.scale, self.rotation, self.x_offset, self.y_offset, [(a.pos, a.original) for a in self.anchors], self.M_anchors, self.state)
-        if len(self.state_stack) > 0:
-            previous_state = self.state_stack[self.current_state_index]
-            identical = (np.linalg.norm(np.array(previous_state[:4]) - np.array(current_state[:4]) ) < 1e-3) and (np.linalg.norm(previous_state[5]-current_state[5]) < 1e-3)
-            if identical:
-                return
-        self.state_stack = self.state_stack[:self.current_state_index + 1]
-        self.state_stack.append(current_state)
-        self.current_state_index += 1
-
-    def undo(self):
-        if self.current_state_index > 0:
-            self.current_state_index -= 1
-            self.load_state()
-
-    def redo(self):
-        if self.current_state_index < len(self.state_stack) - 1:
-            self.current_state_index += 1
-            self.load_state()
-    
-    def is_identity(self):
-        if self.M_anchors is not None and np.linalg.norm(self.M_anchors-np.eye(3)) > 1e-6:
-            return False
-        return self.x_offset == 0 and self.y_offset == 0 and self.scale == 1.0 and self.rotation == 0
-
-    def load_state(self):
-        if 0 <= self.current_state_index < len(self.state_stack):
-            state = self.state_stack[self.current_state_index]
-            self.scale, self.rotation, self.x_offset, self.y_offset, anchor_states, self.M_anchors, self.state = state
-            self.anchors = [Anchor(pos[0], pos[1], original) for pos, original in anchor_states]
-
-    def reset_anchors(self):
-        image = self.get_image()
-        if image is not None:
-            m = 30
-            w = image.shape[1]
-            h = image.shape[0]
-            anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
-            M = calc_transform((image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio), self.scale, self.rotation, self.x_offset, self.y_offset)
-            anchors_pos = [apply_homography(self.M_anchors @ M @ self.M_original, pos) for pos in anchors_pos]
-            self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
-        else:
-            m = 100
-            w = window_size[0]
-            h = window_size[1]
-            anchors_pos = [(m, m), (m, h - m), (w - m, m), (w - m, h - m)]
-            self.anchors = [Anchor(x, y, original=True) for x, y in anchors_pos]
-    
-    def initialize_from_homography(self, H):
-        translation, rotation, scale, H_residual = decompose_homography(H, self.image.shape, self.scale_ratio)
-
-        self.scale = scale
-        self.rotation = rotation
-        self.x_offset = translation[0]
-        self.y_offset = translation[1]
-        self.M_anchors = H_residual
-        self.reset_anchors()
-        return 
-
-    def render(self, M_global):
-        if self.state == ImageState.NOT_VALID:
-            return None
-        image = self.get_image()
-        if image is None:
-            return None
-        M = calc_transform([image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
-        H = calc_homography(self.anchors)
-        
-        result = cv2.warpPerspective(image, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
-        self.update_derived_images()
-        return result
-    
-    def update_derived_images(self):
-        H_prev = self.M_anchors @ calc_transform([self.image.shape[1] * self.scale_ratio, self.image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset) @ self.M_original
-        for cur, H_rel in self.derived_images:
-            if cur is None:
-                continue
-            if not (cur.state == ImageState.MATCHED or cur.state == ImageState.LOADED):
-                continue
-            cur_H = H_prev @ H_rel @ np.linalg.inv(cur.M_original)
-            cur.initialize_from_homography(cur_H)
-            cur.reset_anchors()
-            cur.state = ImageState.MATCHED
-
-    def push_anchor(self, pt):
-        min_dist = -1
-        closest_anchor = None
-        for anchor in self.anchors:
-            dist = np.linalg.norm(np.array(anchor.pos) - np.array(pt))
-            if min_dist < 0 or dist < min_dist:
-                min_dist = dist
-                closest_anchor = anchor
-        new_anchor = Anchor(pt[0], pt[1])
-        self.anchors.remove(closest_anchor)
-        self.anchors.append(new_anchor)
-        self.save_state()
-
-    def relative_transform(self):
-        if self.image is None:
-            return np.eye(3)
-        M = calc_transform([self.image.shape[1] * self.scale_ratio, self.image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
-        H = calc_homography(self.anchors)
-        T = H @ self.M_anchors @ M @ self.M_original
-        return T
-
-    def __str__(self):
-        T = self.relative_transform()
-        return f"{self.image_path}, {','.join([str(x) for x in T.flatten().tolist()])}"
-    
-    @staticmethod
-    def create_panorama(image, H = None, name="panorama"):
-        o = ImageObject(name)
-        o.is_panorama = True
-        o.state = ImageState.PANORAMA
-        o.image = image
-        o.scale_ratio = min(window_size[0] / o.image.shape[1], window_size[1] / o.image.shape[0])
-        o.M_original = np.diag([o.scale_ratio, o.scale_ratio, 1])
-        if H is not None:
-            cur_H = H @ np.linalg.inv(o.M_original)
-            o.initialize_from_homography(cur_H)
-        else:
-            o.M_anchors = np.eye(3)
-        return o
-       
 class DebugInfo:
     def __init__(self, root, app):
         self.debug_window = None
@@ -416,7 +97,7 @@ class ButtonPanel:
     def __init__(self, root, app):
         self.root = root
         self.app = app
-        self.frame = tk.Frame(self.root, bg='grey')
+        self.frame = tk.Frame(self.root, bg='white')
         self.frame.pack(side="left", fill="y")
         self.create_widgets()
         self.current_index = 0
@@ -529,7 +210,7 @@ class ButtonPanel:
                 H = np.array(parsed_H).reshape(3,3)
                 if np.linalg.norm(H - np.eye(3)) < 1e-6:
                     H = None
-            new_object = ImageObject(image_path, H)
+            new_object = ImageObject(image_path, H, window_size=self.app.window_size)
             if not new_object.state == ImageState.NOT_VALID:
                 new_objects.append(new_object)
             else:
@@ -661,11 +342,12 @@ class ButtonPanel:
 
 class ImageAlignerApp:
     def __init__(self, root, image_object=None, map_object=None):
-        if not 'root' in dir(self):
-            self.root = root
+        self.root = root
         
         if image_object is None:
-            image_object = ImageObject("")
+            image_object = ImageObject("",window_size=(800,600))
+        
+        self.window_size = None
 
         self.image = image_object
         self.map = map_object
@@ -698,17 +380,28 @@ class ImageAlignerApp:
         self.panorama_cache = None
         self.num_panoramas = 0
 
-        if not 'debug_info' in dir(self):
-            self.debug_info = DebugInfo(root, self)
-            self.info_panel = InfoPanel(root, self)
-            self.button_panel = ButtonPanel(root, self)
-            self.canvas = tk.Canvas(self.root, width=window_size[0], height=window_size[1])
-            self.canvas.pack(fill='both', expand=True)
-            self.setup_bindings()
+        self.configure_window()
+        self.debug_info = DebugInfo(root, self)
+        self.info_panel = InfoPanel(root, self)
+        self.button_panel = ButtonPanel(root, self)
+        self.canvas = tk.Canvas(self.root, width=self.window_size[0], height=self.window_size[1])
+        self.canvas.pack(fill='both', expand=True)
+        self.setup_bindings()
         
         if self.image.state == ImageState.NOT_VALID:
             self.display_message('ERROR: ' + self.image.error_message)
         self.render()
+        
+    def configure_window(self):
+        SCREEN_FACTOR = 0.9
+        screen_size = [int(self.root.winfo_screenwidth()*SCREEN_FACTOR), int(self.root.winfo_screenheight()*SCREEN_FACTOR)]
+        screen_size[0] = min(screen_size[0], int(screen_size[1]*1.9))
+        self.window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
+        self.root.title("TagIm Aligning App")
+        self.root.geometry(f"{screen_size[0]}x{screen_size[1]}")
+        if os.path.exists('resources/logo.jpg'):
+            photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
+            self.root.wm_iconphoto(False, photo)
 
     def setup_bindings(self):
         self.root.bind('<KeyPress>', self.on_key_press)
@@ -735,15 +428,14 @@ class ImageAlignerApp:
         self.canvas.config(width=event.width, height=event.height)
     
     def on_canvas_resize(self, event):
-        global window_size
-        window_size = [event.width, event.height]
+        self.window_size = [event.width, event.height]
         self.last_map = None
         self.render(update_state=False)
     
     def upload_image(self):
         self.clear_messages()
         image_path = filedialog.askopenfilename(title='Select image to align...')
-        self.image = ImageObject(image_path) 
+        self.image = ImageObject(image_path,window_size=self.window_size) 
         if self.image.state == ImageState.NOT_VALID:
             self.display_message('ERROR: ' + self.image.error_message)
             return
@@ -751,7 +443,7 @@ class ImageAlignerApp:
         self.render()
         
     def M_global(self):
-        center = np.array(window_size)/2
+        center = np.array(self.window_size)/2
         
         if self.zoom_center is not None:
             prev_matrix = translation_matrix([self.global_x_offset, self.global_y_offset]) @ translation_matrix(center)@scale_matrix(self.last_global_scale)@translation_matrix(-center)
@@ -770,25 +462,25 @@ class ImageAlignerApp:
     
     def blend_images(self):
         if self.map is None:
-            return np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
+            return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
         
         M_global = self.M_global()
-        im2 = self.image.render(M_global)
+        im2 = self.image.render(M_global, window_size=self.window_size)
         
         if im2 is None:
-            return np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
+            return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
         
         M_global = self.M_global()
         if self.last_map is None or not (M_global==self.last_state).all():
-            self.last_map = self.map.warp_map(M_global, window_size)
+            self.last_map = self.map.warp_map(M_global, self.window_size)
             if self.last_map is None:
-                self.last_map = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
+                self.last_map = np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
             self.last_state = M_global
         
         im1 = self.last_map.copy()
         
         if im1 is None:
-            im1 = np.zeros((window_size[1], window_size[0], 3), dtype=np.uint8)
+            im1 = np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
 
         if self.contrast_mode or self.edge_mode:
             if self.contrast_mode:
@@ -825,7 +517,7 @@ class ImageAlignerApp:
             rendered_image = draw_grid(rendered_image, self.M_global())
 
         if self.viewport_mode:
-            rendered_image = cv2.rectangle(rendered_image, (0, 0), (window_size[0], window_size[1]), (0, 0, 255), 10)
+            rendered_image = cv2.rectangle(rendered_image, (0, 0), (self.window_size[0], self.window_size[1]), (0, 0, 255), 10)
 
         img_pil = Image.fromarray(rendered_image)
         self.tk_image = ImageTk.PhotoImage(img_pil)
@@ -884,7 +576,7 @@ class ImageAlignerApp:
         M_selected = calc_transform([selected.image.shape[1] * selected.scale_ratio, selected.image.shape[0] * selected.scale_ratio], selected.scale, selected.rotation, selected.x_offset, selected.y_offset)
         cur_H = selected.M_anchors @ M_selected @ selected.M_original @ H_rel 
         self.num_panoramas += 1
-        new_pair = ImageObject.create_panorama(panorama_image, cur_H, name=f"panorama_{self.num_panoramas}")
+        new_pair = ImageObject.create_panorama(panorama_image, cur_H, name=f"panorama_{self.num_panoramas}",window_size=self.window_size)
         #add to the list
         self.button_panel.images.append(new_pair)
         self.button_panel.image_listbox.delete(0,tk.END)
@@ -1013,7 +705,7 @@ class ImageAlignerApp:
         
     def run_matching(self):
         M_global = self.M_global()
-        im1 = self.map.warp_map(M_global, window_size)
+        im1 = self.map.warp_map(M_global, self.window_size)
         im2 = self.image.get_image()
         H = sift_matching_with_homography(im2, im1)
         if H is None:
@@ -1223,22 +915,9 @@ class ImageAlignerApp:
         self.root.quit()
         self.root.destroy()
 
-def configure_screen_size(root):
-    global window_size, screen_size
-    screen_size = [int(root.winfo_screenwidth()*SCREEN_FACTOR), int(root.winfo_screenheight()*SCREEN_FACTOR)]
-    screen_size[0] = min(screen_size[0], int(screen_size[1]*1.9))
-    window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
 
 def main():
     root = tk.Tk()
-    global window_size, screen_size
-    configure_screen_size(root)
-    root.title("TagIm Aligning App")
-    root.geometry(f"{screen_size[0]}x{screen_size[1]}")
-    if os.path.exists('resources/logo.jpg'):
-        photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
-        root.wm_iconphoto(False, photo)
-
     app = ImageAlignerApp(root)
     app.button_panel.load_csv("output/simulated_list2.csv")
 

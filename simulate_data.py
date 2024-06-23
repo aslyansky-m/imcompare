@@ -5,6 +5,7 @@ from random import uniform
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from common import rotation_matrix, scale_matrix, translation_matrix
+from tqdm import trange
 
 
 # Load the image
@@ -14,10 +15,10 @@ image = cv2.imread('output/hrscd/map.tif')
 output_size = (640, 512)
 
 # Define the number of images to generate
-num_images = 30
+num_images = 1000
 
 # Create the output directory if it doesn't exist
-output_fld = 'output/simulated2/'
+output_fld = 'output/simulated4/'
 os.makedirs(output_fld, exist_ok=True)
 
 height, width = image.shape[:2] 
@@ -45,9 +46,9 @@ rotations = interp1d([0,0.2,0.5, 1], [-np.pi/6, 0, 0, np.pi/6],kind='cubic')(t)
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 
 # Generate the images
-imfile_path = 'output/simulated_list2.csv'
+imfile_path = 'output/simulated_list4.csv'
 imfiles = []
-for i in range(num_images):
+for i in trange(num_images):
 
     M = translation_matrix(center)@scale_matrix(scales[i])@rotation_matrix(rotations[i])@translation_matrix(-center)@translation_matrix([shift_x[i], shift_y[i]])
 
