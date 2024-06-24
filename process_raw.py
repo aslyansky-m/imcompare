@@ -14,6 +14,41 @@ import shutil
 import pandas as pd
 from PIL import Image, ImageTk
 
+def fix_name(filename):
+    name = os.path.basename(filename).split('.')[0]
+    num = [int(s) for s in name.split('_')]
+    new_name = f"{num[0]:03d}_{num[1]:03d}"
+    return filename.replace(name, new_name)
+
+def process_tiff(path):
+    im = Image.open(path)
+    im = np.array(im)
+    maximum = np.max(im)
+    crop_max = np.where(im == maximum)[1].max()
+    im[:,:6] = np.mean(im[:,6:])
+    if crop_max != 5:
+        m = np.mean(im)
+        s = np.std(im)
+        p = 4
+        th_low = max(0, m - p*s)
+        th_high = min(pow(2,16)-1, m + p*s)
+        im = np.clip(im, th_low, th_high)
+    
+    im -= np.min(im)
+    im = im/np.max(im)
+    im = (im*255).astype(np.uint8)
+    im[:,:6] = 0
+        
+    return im
+
+def get_image(path):
+    if path.endswith('.tiff'):
+        im = process_tiff(path)
+    else:
+        im = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    return im
+    
+
 def track_frames(im0, im1):
     detection_params = dict(maxCorners=1000,qualityLevel=0.0001,minDistance=12,blockSize=11)
     tracking_params = dict(winSize=(8, 8),maxLevel=4,criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.03),minEigThreshold=5e-5)
@@ -32,11 +67,49 @@ def track_frames(im0, im1):
     p0 = np.squeeze(p0)[st == 1]
     p1 = np.squeeze(p1)[st == 1]
     
-    if len(p0) > 0:
+    if len(p0) > 10:
         H, mask = cv2.estimateAffinePartial2D(p0, p1, **affine_params)
+        H = np.vstack([H, [0, 0, 1]])
+        if H is None:
+            H = np.eye(3)
     else:
         H = np.eye(3)
     return H
+
+def select_keyframes(Hs):
+    angles = []
+    scales = []
+    shifts = []
+    for H in Hs:
+        angle = np.arctan2(H[1,0], H[0,0])
+        scale = np.sqrt(np.linalg.det(H[:2,:2]))
+        shift = H[:2,2]
+        angles.append(angle)
+        scales.append(scale)
+        shifts.append(shift)
+    
+    scales = np.array(scales)
+    angles = np.unwrap(np.array(angles))
+    shifts = np.array(shifts)
+    
+    first = 0
+    kfs = [first]
+    
+    for i in range(first+1, len(angles)):
+        to_append = False
+        if i - kfs[-1] > 30:
+            to_append = True
+        if np.abs(np.log(scales[i]/scales[kfs[-1]])) > np.log(1.2): 
+            to_append = True
+        if np.linalg.norm((shifts[i] - shifts[kfs[-1]])) > 100:
+            to_append = True
+        if to_append:
+            kfs.append(i)
+            
+    kfs = np.array(kfs)
+    
+    return kfs, scales, angles, shifts
+
 
 class ImageProcessorApp:
     def __init__(self, root):
@@ -45,6 +118,7 @@ class ImageProcessorApp:
         
         self.boundaries = None
         self.crop = None
+        self.selected_frames = None
         self.saved_frames = None
         self.saved_map = None
 
@@ -147,7 +221,7 @@ class ImageProcessorApp:
     def browse_image_folder(self):
         folder = filedialog.askdirectory()
         if folder:
-            if all(file.endswith(('.png', '.jpg', '.jpeg', '.tif')) for file in os.listdir(folder)):
+            if any(file.endswith(('.png', '.jpg', '.jpeg', '.tiff')) for file in os.listdir(folder)):
                 self.image_folder_path.set(folder)
             else:
                 messagebox.showerror("Error", "Selected folder does not contain valid image files.")
@@ -194,12 +268,13 @@ class ImageProcessorApp:
         
         if not image_folder:
             return
-        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.tiff'))]
         
         if not images:
             return
         
-        image = cv2.imread(os.path.join(image_folder, images[0]), cv2.IMREAD_GRAYSCALE)
+        filename = os.path.join(image_folder, images[0])
+        image = get_image(filename)
         new_image = cv2.createCLAHE(clipLimit=value).apply(image)
         
         fig, ax = plt.subplots(1,2)
@@ -221,83 +296,105 @@ class ImageProcessorApp:
         image_folder = self.image_folder_path.get()
         if not image_folder:
             return
-        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        images = [os.path.join(image_folder, f) for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.tiff'))]
         if not images:
             return
-        total_steps = len(images)  # Adding 1 for cropping step
+        
+        if images[0].endswith('.tiff'):
+            ind = np.argsort([fix_name(f) for f in images])
+            images = [images[i] for i in ind]
+        else:
+            images = sorted(images)
 
-        means_before = []
-        means_after = []
         frame_step = self.param2_slider.get()
         clip_limit = self.param1_slider.get()
         
+        selected_images = images[::frame_step]
         clahe = cv2.createCLAHE(clipLimit=clip_limit)
         
+        ratio = 0.9
+        total_steps = len(selected_images)
+        
         Hs = [np.eye(3)]
-
-        for i, image_file in enumerate(images, start=1):
-            self.current_step_label.config(text=f"Processing {image_file}...")
-            self.current_progress['value'] = (i / total_steps) * 100
+        prev_image = get_image(selected_images[0])
+        for i in range(1,len(selected_images)):
+            im0 = prev_image
+            file = selected_images[i]
+            try:
+                im1 = get_image(file)
+            except:
+                continue
+            self.current_step_label.config(text=f"Processing {os.path.basename(file)}...")
+            self.current_progress['value'] = ratio * (i / total_steps) * 100
             self.root.update_idletasks()
-
-            # Simulate image processing (replace with actual processing code)
-            image_path = os.path.join(image_folder, image_file)
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            means_before.append(np.mean(image))
-
             
-            clahe_image = clahe.apply(image)
-            means_after.append(np.mean(clahe_image))
+            H = track_frames(im1, im0)
+            Hs.append(H @ Hs[-1])
+            prev_image = im1.copy()
 
-            # time.sleep(0.1)  # Simulate processing time
+        self.current_step_label.config(text=f"Selecting Keyframes...")
+        self.current_progress['value'] = ratio * 100
+        self.root.update_idletasks()
+            
+        kfs, scales, angles, shifts = select_keyframes(Hs)
+        self.display_keyframes(kfs, scales, angles, shifts)
+        self.selected_frames = [selected_images[i] for i in kfs]
 
         self.current_step_label.config(text="Processing completed.")
         self.current_progress['value'] = 100
-        self.display_results(means_before, means_after, frame_step)
-
-    def display_results(self, means_before, means_after, frame_step):
-        # smoothing the data
-        means_before = np.convolve(means_before, np.ones(frame_step)/frame_step, mode='valid')
-        means_after = np.convolve(means_after, np.ones(frame_step)/frame_step, mode='valid')
-        fig, ax = plt.subplots(2,1)
-        ax[0].plot(means_before)
-        ax[1].plot(means_after)
-        ax[0].scatter(range(0, len(means_before), frame_step), [means_before[i] for i in range(0, len(means_before), frame_step)], color='red')
-        ax[1].scatter(range(0, len(means_after), frame_step), [means_after[i] for i in range(0, len(means_after), frame_step)], color='blue')
-        ax[0].set_title("Before CLAHE")
-        ax[1].set_title("After CLAHE")
+        self.root.update_idletasks()
+        
+    def display_keyframes(self, kfs, scales, angles, shifts):
+            
+        fig, ax = plt.subplots(4,1, figsize=(6,6))
+        ax[0].plot(np.log2(scales),label='Scale')
+        ax[1].plot(angles,label='Angle')
+        ax[2].plot(shifts[:,0],label='Shift X')
+        ax[3].plot(shifts[:,1],label='Shift Y')
+        ax[0].scatter(kfs, np.log2(scales)[kfs], color='red')
+        ax[1].scatter(kfs, angles[kfs], color='red')
+        ax[2].scatter(kfs, shifts[:,0][kfs], color='red')
+        ax[3].scatter(kfs, shifts[:,1][kfs], color='red')
+        ax[0].legend()
+        ax[1].legend()
+        ax[2].legend()
+        ax[3].legend()
+        ax[0].set_title(f'Selected {len(kfs)} Keyframes')
 
         for widget in self.plot_frame.winfo_children():
-            widget.destroy()  # Clear previous plot if any
+            widget.destroy() 
 
         canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack()
     
     def save_frames(self):
+        if self.selected_frames is None:
+            messagebox.showerror("Error", "No keyframes selected.")
+            return
+        
         if not os.path.isdir(self.output_folder_path.get()):
             messagebox.showerror("Error", "Invalid output folder selected.")
             return
         
-        image_folder = self.image_folder_path.get()
-        images = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        step = self.param2_slider.get()
-        selected_images = images[::step]
-        total_steps = len(selected_images) + 1  # Adding 1 for cropping step
+        os.makedirs(self.output_folder_path.get() + '/images/', exist_ok=True)
 
         saved_frames = []
-        for i, image_file in enumerate(selected_images, start=1):
+        for i, image_file in enumerate(self.selected_frames):
             self.current_step_label.config(text=f"Saving {image_file}...")
-            self.current_progress['value'] = (i / total_steps) * 100
+            self.current_progress['value'] = (i / len(self.selected_frames)) * 100
             self.root.update_idletasks()
+            
+            output_file = os.path.join(self.output_folder_path.get() + '/images/', f'im{i:03d}_{os.path.basename(image_file)}')
+            frame = get_image(image_file)
+            cv2.imwrite(output_file, frame)
             
             saved_frames.append(image_file)
 
-            # Simulate saving process (replace with actual saving code)
-            time.sleep(0.01)  # Simulate saving time
+        self.saved_frames = saved_frames
         self.current_step_label.config(text=f"Frames Saved.")
         self.current_progress['value'] = 100
-        self.saved_frames = saved_frames
+        self.root.update_idletasks()
         
     def show_geotif_ranges(self, geotif_file):
         # Simulated range for center coordinates and radius (example values)
@@ -495,5 +592,5 @@ if __name__ == "__main__":
     if os.path.exists('resources/logo.jpg'):
         photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
         root.wm_iconphoto(False, photo)
-    # app.test_inputs()
+    app.test_inputs()
     root.mainloop()
