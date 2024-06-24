@@ -9,17 +9,13 @@ import time
 import rasterio
 from rasterio.windows import Window
 from common import gps2enu, enu2gps, gps2pix, pix2gps
-import subprocess
 import shutil
 import pandas as pd
 from PIL import Image, ImageTk
-import re
+from rasterio.transform import Affine
+from rasterio.windows import from_bounds
+from rasterio.enums import Resampling
 
-def extract_progress(output):
-    match = re.findall(r'(\d{1,3})(?=\.\.\.)', output)
-    if match:
-        return int(match[-1])
-    return 0
 
 def fix_name(filename):
     name = os.path.basename(filename).split('.')[0]
@@ -385,7 +381,7 @@ class ImageProcessorApp:
             frame = clahe.apply(get_image(image_file))
             cv2.imwrite(output_file, frame)
             
-            saved_frames.append(image_file)
+            saved_frames.append(output_file)
 
         self.saved_frames = saved_frames
         self.current_step_label.config(text=f"Frames Saved.")
@@ -484,6 +480,7 @@ class ImageProcessorApp:
         canvas.get_tk_widget().pack()
     
     def save_map(self):
+        from rasterio.warp import calculate_default_transform, reproject
         if not os.path.isdir(self.output_folder_path.get()):
             messagebox.showerror("Error", "Invalid output folder selected.")
             return
@@ -498,75 +495,91 @@ class ImageProcessorApp:
             
         input_tif = self.geotif_path.get()
         
-        map_fld = output_folder + '/map'
+        map_fld = os.path.join(output_folder, 'map')
         if os.path.exists(map_fld):
             shutil.rmtree(map_fld)
         os.makedirs(map_fld)
 
         resize_factors = [1, 2, 4, 8]
-
-        projwin = f'-projwin {self.crop[0][1]} {self.crop[0][0]} {self.crop[1][1]} {self.crop[1][0]} '
-        filename = None
-    
-        if filename is None:
-            filename = os.path.basename(input_tif).split('.')[0] + '_tiled'
-    
+        filename = os.path.basename(input_tif).split('.')[0] + '_tiled'
+        
         output_size = self.output_size
-        exe = f'gdal_translate -co TILED=YES {projwin} {input_tif} {map_fld}/cropped.tif' 
+
+        # Open the source dataset and crop the image
+        with rasterio.open(input_tif) as src:
+            window = from_bounds(self.crop[0][1], self.crop[1][0], self.crop[1][1], self.crop[0][0], src.transform)
+            cropped_data = src.read(window=window)
+            cropped_transform = src.window_transform(window)
+            
+            cropped_tif = os.path.join(map_fld, 'cropped.tif')
+            with rasterio.open(
+                cropped_tif, 'w',
+                driver='GTiff',
+                height=cropped_data.shape[1],
+                width=cropped_data.shape[2],
+                count=cropped_data.shape[0],
+                dtype=cropped_data.dtype,
+                crs=src.crs,
+                transform=cropped_transform,
+                tiled=True  # Ensure the output is tiled
+            ) as dst:
+                dst.write(cropped_data)
         
         total_time = [0.2] + [1/r**2 for r in resize_factors]
-        total_time = np.array(total_time)
-        total_time += 0.1
-        progress = np.cumsum(total_time)/sum(total_time)
+        total_time = np.array(total_time) + 0.1
+        progress = np.cumsum(total_time) / sum(total_time)
         
-        self.current_step_label.config(text=f"Cropping Map...")
+        self.current_step_label.config(text="Cropping Map...")
         self.current_progress['value'] = 0
         self.root.update_idletasks()
-
-        process = subprocess.Popen(exe, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True)
         
-        for line in process.stdout:
-            cur = extract_progress(line)/100
-            self.current_progress['value'] = cur*progress[0]*100
-            self.root.update_idletasks()
-
-        process.stdout.close()
-        process.wait()
-        
-        self.current_progress['value'] = progress[0]*100
+        self.current_progress['value'] = progress[0] * 100
         self.root.update_idletasks()
-
+        
         for i, factor in enumerate(resize_factors):
-            exe = 'gdalwarp -co TILED=YES '
-            
-            new_output_size = [int(output_size[0]/factor), int(output_size[0]/factor)]
-            
-            exe += f'-ts {new_output_size[0]} {new_output_size[1]} '
-            
-            tif_src = f'{map_fld}/cropped.tif'
+            # Calculate the new output dimensions
+            new_width = int(cropped_data.shape[2] / factor)
+            new_height = int(cropped_data.shape[1] / factor)
 
-            tif_dst = f'{map_fld}/{filename}_{factor:02d}x.tif'
-            
-            exe += tif_src + ' ' + tif_dst
+            with rasterio.open(cropped_tif) as src:
+                # Manually adjust the transform to maintain aspect ratio
+                src_transform = src.transform
+                new_transform = Affine(src_transform.a * factor, src_transform.b, src_transform.c,
+                                    src_transform.d, src_transform.e * factor, src_transform.f)
+
+                kwargs = src.meta.copy()
+                kwargs.update({
+                    'crs': src.crs,
+                    'transform': new_transform,
+                    'width': new_width,
+                    'height': new_height,
+                    'tiled': True  # Ensure the output is tiled
+                })
+                
+                tif_dst = os.path.join(map_fld, f'{filename}_{factor:02d}x.tif')
+                with rasterio.open(tif_dst, 'w', **kwargs) as dst:
+                    for j in range(1, src.count + 1):
+                        reproject(
+                            source=rasterio.band(src, j),
+                            destination=rasterio.band(dst, j),
+                            src_transform=src.transform,
+                            src_crs=src.crs,
+                            dst_transform=new_transform,
+                            dst_crs=src.crs,
+                            resampling=Resampling.bilinear
+                        )
             
             self.current_step_label.config(text=f"Resizing Scale {factor}...")
-
-            process = subprocess.Popen(exe, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True)
-            for line in process.stdout:
-                cur = extract_progress(line)/100
-                self.current_progress['value'] = (progress[i] + cur*(progress[i+1]-progress[i]))*100
-                self.root.update_idletasks()
-
-            process.stdout.close()
-            process.wait()
-        
+            self.current_progress['value'] = progress[i + 1] * 100
+            self.root.update_idletasks()
+            
             time.sleep(0.01)
             
         time.sleep(0.1)
-        os.remove(f'{map_fld}/cropped.tif')
-        self.saved_map = f'{map_fld}/{filename}_{resize_factors[0]:02d}x.tif'
+        os.remove(cropped_tif)
+        self.saved_map = os.path.join(map_fld, f'{filename}_{resize_factors[0]:02d}x.tif')
         
-        self.current_step_label.config(text=f"Maps Saved.")
+        self.current_step_label.config(text="Maps Saved.")
         self.current_progress['value'] = 100
         self.root.update_idletasks()
     
