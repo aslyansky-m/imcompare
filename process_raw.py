@@ -13,6 +13,13 @@ import subprocess
 import shutil
 import pandas as pd
 from PIL import Image, ImageTk
+import re
+
+def extract_progress(output):
+    match = re.findall(r'(\d{1,3})(?=\.\.\.)', output)
+    if match:
+        return int(match[-1])
+    return 0
 
 def fix_name(filename):
     name = os.path.basename(filename).split('.')[0]
@@ -516,7 +523,15 @@ class ImageProcessorApp:
         self.current_progress['value'] = 0
         self.root.update_idletasks()
 
-        subprocess.Popen(exe, shell=True).wait()
+        process = subprocess.Popen(exe, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True)
+        
+        for line in process.stdout:
+            cur = extract_progress(line)/100
+            self.current_progress['value'] = cur*progress[0]*100
+            self.root.update_idletasks()
+
+        process.stdout.close()
+        process.wait()
         
         self.current_progress['value'] = progress[0]*100
         self.root.update_idletasks()
@@ -535,12 +550,19 @@ class ImageProcessorApp:
             exe += tif_src + ' ' + tif_dst
             
             self.current_step_label.config(text=f"Resizing Scale {factor}...")
-            self.current_progress['value'] = progress[i+1]*100
-            self.root.update_idletasks()
 
-            subprocess.Popen(exe, shell=True).wait()
-            time.sleep(0.1)
+            process = subprocess.Popen(exe, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True)
+            for line in process.stdout:
+                cur = extract_progress(line)/100
+                self.current_progress['value'] = (progress[i] + cur*(progress[i+1]-progress[i]))*100
+                self.root.update_idletasks()
+
+            process.stdout.close()
+            process.wait()
         
+            time.sleep(0.01)
+            
+        time.sleep(0.1)
         os.remove(f'{map_fld}/cropped.tif')
         self.saved_map = f'{map_fld}/{filename}_{resize_factors[0]:02d}x.tif'
         
