@@ -25,7 +25,7 @@ def process_tiff(path):
     im = np.array(im)
     maximum = np.max(im)
     crop_max = np.where(im == maximum)[1].max()
-    im[:,:6] = np.mean(im[:,6:])
+    im = im[:,6:]
     if crop_max != 5:
         m = np.mean(im)
         s = np.std(im)
@@ -37,7 +37,6 @@ def process_tiff(path):
     im -= np.min(im)
     im = im/np.max(im)
     im = (im*255).astype(np.uint8)
-    im[:,:6] = 0
         
     return im
 
@@ -247,19 +246,57 @@ class ImageProcessorApp:
         if not os.path.isdir(self.image_folder_path.get()):
             messagebox.showerror("Error", "Invalid image folder selected.")
             return
-        if not os.path.isfile(self.geotif_path.get()) or not self.geotif_path.get().endswith('.tif'):
-            messagebox.showerror("Error", "Invalid GeoTIFF file selected.")
-            return
 
-        try:
-            lat = float(self.center_coord_lat.get())
-            long = float(self.center_coord_long.get())
-            radius = float(self.radius_entry.get())
-        except ValueError:
-            messagebox.showerror("Error", "Invalid coordinates or radius.")
+        image_folder = self.image_folder_path.get()
+        if not image_folder:
             return
+        images = [os.path.join(image_folder, f) for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.tiff'))]
+        if not images:
+            return
+        
+        if images[0].endswith('.tiff'):
+            ind = np.argsort([fix_name(f) for f in images])
+            images = [images[i] for i in ind]
+        else:
+            images = sorted(images)
 
-        self.process_images()
+        frame_step = self.param2_slider.get()
+        clip_limit = self.param1_slider.get()
+        
+        selected_images = images[::frame_step]
+        clahe = cv2.createCLAHE(clipLimit=clip_limit)
+        
+        ratio = 0.9
+        total_steps = len(selected_images)
+        
+        Hs = [np.eye(3)]
+        prev_image = clahe.apply(get_image(selected_images[0]))
+        for i in range(1,len(selected_images)):
+            im0 = prev_image
+            file = selected_images[i]
+            try:
+                im1 = clahe.apply(get_image(file))
+            except:
+                continue
+            self.current_step_label.config(text=f"Processing {os.path.basename(file)}...")
+            self.current_progress['value'] = ratio * (i / total_steps) * 100
+            self.root.update_idletasks()
+            
+            H = track_frames(im1, im0)
+            Hs.append(H @ Hs[-1])
+            prev_image = im1.copy()
+
+        self.current_step_label.config(text=f"Selecting Keyframes...")
+        self.current_progress['value'] = ratio * 100
+        self.root.update_idletasks()
+            
+        kfs, scales, angles, shifts = select_keyframes(Hs)
+        self.display_keyframes(kfs, scales, angles, shifts)
+        self.selected_frames = [selected_images[i] for i in kfs]
+
+        self.current_step_label.config(text="Processing completed.")
+        self.current_progress['value'] = 100
+        self.root.update_idletasks()
     
     def update_image(self, value):
         # Update image based on the slider's current value
@@ -292,57 +329,6 @@ class ImageProcessorApp:
         canvas.draw()
         canvas.get_tk_widget().pack()
 
-    def process_images(self):
-        image_folder = self.image_folder_path.get()
-        if not image_folder:
-            return
-        images = [os.path.join(image_folder, f) for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.tiff'))]
-        if not images:
-            return
-        
-        if images[0].endswith('.tiff'):
-            ind = np.argsort([fix_name(f) for f in images])
-            images = [images[i] for i in ind]
-        else:
-            images = sorted(images)
-
-        frame_step = self.param2_slider.get()
-        clip_limit = self.param1_slider.get()
-        
-        selected_images = images[::frame_step]
-        clahe = cv2.createCLAHE(clipLimit=clip_limit)
-        
-        ratio = 0.9
-        total_steps = len(selected_images)
-        
-        Hs = [np.eye(3)]
-        prev_image = get_image(selected_images[0])
-        for i in range(1,len(selected_images)):
-            im0 = prev_image
-            file = selected_images[i]
-            try:
-                im1 = get_image(file)
-            except:
-                continue
-            self.current_step_label.config(text=f"Processing {os.path.basename(file)}...")
-            self.current_progress['value'] = ratio * (i / total_steps) * 100
-            self.root.update_idletasks()
-            
-            H = track_frames(im1, im0)
-            Hs.append(H @ Hs[-1])
-            prev_image = im1.copy()
-
-        self.current_step_label.config(text=f"Selecting Keyframes...")
-        self.current_progress['value'] = ratio * 100
-        self.root.update_idletasks()
-            
-        kfs, scales, angles, shifts = select_keyframes(Hs)
-        self.display_keyframes(kfs, scales, angles, shifts)
-        self.selected_frames = [selected_images[i] for i in kfs]
-
-        self.current_step_label.config(text="Processing completed.")
-        self.current_progress['value'] = 100
-        self.root.update_idletasks()
         
     def display_keyframes(self, kfs, scales, angles, shifts):
             
@@ -378,6 +364,9 @@ class ImageProcessorApp:
             return
         
         os.makedirs(self.output_folder_path.get() + '/images/', exist_ok=True)
+        
+        clip_limit = self.param1_slider.get()
+        clahe = cv2.createCLAHE(clipLimit=clip_limit)
 
         saved_frames = []
         for i, image_file in enumerate(self.selected_frames):
@@ -386,7 +375,7 @@ class ImageProcessorApp:
             self.root.update_idletasks()
             
             output_file = os.path.join(self.output_folder_path.get() + '/images/', f'im{i:03d}_{os.path.basename(image_file)}')
-            frame = get_image(image_file)
+            frame = clahe.apply(get_image(image_file))
             cv2.imwrite(output_file, frame)
             
             saved_frames.append(image_file)
