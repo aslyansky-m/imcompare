@@ -157,12 +157,13 @@ def create_cache(images, with_gui=True, step_penalty = 0.1, matching_dist=10):
     step = 0
     for i in range(N):
         for j in range(i):
-            if abs(i-j) < matching_dist:
-                H, score, inlier = match_sift_features(features[i], features[j])
-                ratios[i, j] = score
-                inliers[i, j] = inlier
-                matrices[i][j] = H
-                matrices[j][i] = np.linalg.inv(H)
+            if abs(i-j) > matching_dist:
+                continue
+            H, score, inlier = match_sift_features(features[i], features[j])
+            ratios[i, j] = score
+            inliers[i, j] = inlier
+            matrices[i][j] = H
+            matrices[j][i] = np.linalg.inv(H)
             step += 1
             cur_ratio = step / second_steps
             global_ratio = (time_ratio*first_steps + (1-time_ratio)*step)/total_steps
