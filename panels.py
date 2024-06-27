@@ -148,8 +148,11 @@ class ButtonPanel:
         self.frame.pack(side="left", fill="y")
         self.create_widgets()
         self.current_index = 0
+        self.current_starred_index = 0
         self.images = []
+        self.starred_images = []
         self.output_folder = None
+        self.lru_cache = []
         
     def toggle_panel(self):
         if self.panel.winfo_ismapped():
@@ -225,15 +228,19 @@ class ButtonPanel:
         self.image_listbox = tk.Listbox(self.image_list_frame, yscrollcommand=self.image_list_scrollbar.set,bg='white')
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.image_listbox.bind('<<ListboxSelect>>', self.on_selection)
+        def noop(event):
+            pass
+        self.image_listbox.bind('<Up>', noop)
+        self.image_listbox.bind('<Down>', noop)
         self.image_list_scrollbar.config(command=self.image_listbox.yview)
         
-        self.selected_list_frame = tk.Frame(self.frame,bg='white')
-        self.selected_list_scrollbar = tk.Scrollbar(self.selected_list_frame)
-        self.selected_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.selected_listbox = tk.Listbox(self.selected_list_frame, yscrollcommand=self.selected_list_scrollbar.set,bg='white')
-        self.selected_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.selected_listbox.bind('<<ListboxSelect>>', self.on_selection)
-        self.selected_list_scrollbar.config(command=self.image_listbox.yview)
+        self.starred_list_frame = tk.Frame(self.frame,bg='white')
+        self.starred_list_scrollbar = tk.Scrollbar(self.starred_list_frame)
+        self.starred_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.starred_listbox = tk.Listbox(self.starred_list_frame, yscrollcommand=self.starred_list_scrollbar.set,bg='white')
+        self.starred_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.starred_listbox.bind('<<ListboxSelect>>', self.on_selection_starred)
+        self.starred_list_scrollbar.config(command=self.image_listbox.yview)
 
         buttons = [
             self.alpha_slider,
@@ -250,8 +257,8 @@ class ButtonPanel:
             self.save_results_button,
             tk.Label(self.frame, text="Images:", bg='white'),
             self.image_list_frame,
-            tk.Label(self.frame, text="Selected Images:", bg='white'),
-            self.selected_list_frame
+            tk.Label(self.frame, text="Starred Images:", bg='white'),
+            self.starred_list_frame
         ]
         for i, b in enumerate(buttons):
             b.grid(row=i, column=0, sticky='ew')
@@ -273,7 +280,8 @@ class ButtonPanel:
             ('h', "Homography mode"),
             ('o', "Reset homography"),
             ('p', "Create panorama"),
-            ('s', "Print coordinates"),
+            ('s', "Add image to starred list"),
+            ('i', "Print coordinates"),
             ('q', "Reset settings"),
             ('m', "Automatic matching"),
             ('g', "Toggle grid visibility"),
@@ -296,16 +304,19 @@ class ButtonPanel:
             for key, description in descriptions:
                 self.help_text_box.insert(tk.END, f"{key}: {description}\n")
             self.help_text_box.config(state=tk.DISABLED)
-        
+    
+    def filename_to_title(self, filename):
+        normalized_path = os.path.normpath(filename)
+        parts = normalized_path.split(os.sep)
+        if len(parts) > 3:
+            parts = parts[-3:]
+        result = os.path.join(*parts)
+        return result
         
     def add_new_images(self, new_objects):
         self.image_listbox.delete(0,tk.END)
         for new_object in new_objects:
-            normalized_path = os.path.normpath(new_object.image_path)
-            parts = normalized_path.split(os.sep)
-            if len(parts) > 3:
-                parts = parts[-3:]
-            result = os.path.join(*parts)
+            result = self.filename_to_title(new_object.image_path)
             self.image_listbox.insert(tk.END, result)
         self.images = new_objects
         self.select_image(0)
@@ -363,8 +374,7 @@ class ButtonPanel:
             return
         self.image_listbox.delete(self.current_index)
         self.select_image(self.current_index)
-        
-            
+             
     def select_image(self, new_index):
         if len(self.images) == 0:
             self.app.clear_messages()
@@ -376,6 +386,16 @@ class ButtonPanel:
         self.image_listbox.selection_set(self.current_index)
         self.image_listbox.see(self.current_index)
         self.app.image = self.images[self.current_index]
+        if self.app.image in self.lru_cache:
+            self.lru_cache.remove(self.app.image)
+        self.lru_cache.insert(0, self.app.image)
+        if len(self.lru_cache) > 30:
+            evicted = self.lru_cache.pop()
+            del evicted.image
+            evicted.image = None
+            evicted.state = ImageState.EVICTED
+            
+        print(self.app.image.image_path)
         cur = self.app.image
         if self.app.automatic_matching:
             self.app.match_images(cur, prev)
@@ -383,17 +403,39 @@ class ButtonPanel:
         self.app.render()
         self.app.sync_sliders()
         
-    def next_image(self):
-        self.select_image(self.current_index+1)
-        
-    def previous_image(self):
-        self.select_image(self.current_index-1)
+    def select_starred_image(self, new_index):
+        if len(self.starred_images) == 0:
+            return
+        new_index = new_index % len(self.starred_images)
+        self.current_starred_index = new_index
+        self.starred_listbox.selection_set(new_index)
+        self.starred_listbox.see(new_index)
+        selected_image = self.starred_images[new_index]
+        print('new')
+        print(selected_image.image_path)
+        image_index = self.images.index(selected_image)
+        print(self.images[image_index].image_path)
+        self.select_image(image_index)
 
     def on_selection(self, event):
-        if len(self.image_listbox.curselection())==0:
+        selected_index = self.image_listbox.curselection()
+        if len(selected_index)==0:
             return
-        selected_index = self.image_listbox.curselection()[0]
+        selected_index = selected_index[0]
         self.select_image(selected_index)
+        
+    def on_selection_starred(self, event):
+        selected_index = self.starred_listbox.curselection()
+        if len(selected_index)==0:
+            return
+        selected_index = selected_index[0]
+        self.select_starred_image(selected_index)
+        
+    def add_starred_image(self, image):
+        if image in self.starred_images:
+            self.starred_images.remove(image)
+        self.starred_images.append(image)
+        self.update_starred_listbox()
         
     def update_listbox(self):
         for i, image in enumerate(self.images):
@@ -406,6 +448,16 @@ class ButtonPanel:
                 continue
             index = self.images.index(image)
             self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='navy')
+        
+        for image in self.starred_images:
+            index = self.images.index(image)
+            self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='DarkGoldenrod4')
+    
+    def update_starred_listbox(self):
+        self.starred_listbox.delete(0,tk.END)
+        for image in self.starred_images:
+            result = self.filename_to_title(image.image_path)
+            self.starred_listbox.insert(tk.END, result)
     
     def run_raw_processing(self):
         try:

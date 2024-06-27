@@ -530,7 +530,7 @@ class ImageAlignerApp:
             self.reset_homography()
         elif event.char == 'p':
             self.create_panorama()
-        elif event.char == 's':
+        elif event.char == 'i':
             self.print_coords()
         elif event.char == 'q':
             self.reset()
@@ -542,10 +542,12 @@ class ImageAlignerApp:
             self.toggle_borders()
         elif event.char == 'a':
             self.run_matching()
+        elif event.char == 's':
+            self.button_panel.add_starred_image(self.image)
         elif event.keysym == 'Right':
-            self.button_panel.next_image()
-        elif event.keysym == 'Left':
-            self.button_panel.previous_image()
+            self.button_panel.select_image(self.button_panel.current_index + 1)
+        elif event.keysym == 'Left' or event.keysym == 'Up':
+            self.button_panel.select_image(self.button_panel.current_index - 1)
         self.render()
 
     def on_key_release(self, event):

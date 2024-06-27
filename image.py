@@ -123,6 +123,7 @@ class ImageState(Enum):
     MATCHED = 5
     LOCKED = 6
     PANORAMA = 7
+    EVICTED = 8
     
     @staticmethod
     def to_color(state):
@@ -130,11 +131,12 @@ class ImageState(Enum):
             ImageState.NOT_VALID: 'red',
             ImageState.NOT_LOADED: 'white',
             ImageState.INITIALIZED: 'Slategray1',
-            ImageState.LOADED: 'ivory',
+            ImageState.LOADED: 'LightBlue1',
             ImageState.MOVED: 'SeaGreen2',
             ImageState.MATCHED: 'RosyBrown1',
             ImageState.LOCKED: 'saddle brown',
-            ImageState.PANORAMA: 'violet'
+            ImageState.PANORAMA: 'violet',
+            ImageState.EVICTED: 'gray69'
         }
         return colors[state]
     
@@ -173,7 +175,10 @@ class ImageObject:
     def get_image(self):
         if self.state == ImageState.NOT_VALID:
             return None
-        if self.state == ImageState.NOT_LOADED or self.image is None:
+        if self.state == ImageState.EVICTED:
+            self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
+            self.state = self.state_stack[-1][6]
+        elif self.state == ImageState.NOT_LOADED or self.image is None:
             try:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
                 self.scale_ratio = min(self.window_size[0] / self.image.shape[1], self.window_size[1] / self.image.shape[0])
