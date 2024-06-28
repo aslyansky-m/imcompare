@@ -7,6 +7,7 @@ from pathlib import Path
 from process_raw import ImageProcessorApp
 from image import *
 from common import *
+import time
 
 class MenuBar:
     def __init__(self, root, app):
@@ -153,6 +154,7 @@ class ButtonPanel:
         self.starred_images = []
         self.output_folder = None
         self.lru_cache = []
+        self.selection_time = 0
         
     def toggle_panel(self):
         if self.panel.winfo_ismapped():
@@ -225,22 +227,18 @@ class ButtonPanel:
         self.image_list_frame = tk.Frame(self.frame,bg='white')
         self.image_list_scrollbar = tk.Scrollbar(self.image_list_frame)
         self.image_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.image_listbox = tk.Listbox(self.image_list_frame, yscrollcommand=self.image_list_scrollbar.set,bg='white')
+        self.image_listbox = tk.Listbox(self.image_list_frame, exportselection=False, yscrollcommand=self.image_list_scrollbar.set,bg='white')
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.image_listbox.bind('<<ListboxSelect>>', self.on_selection)
-        def noop(event):
-            pass
-        self.image_listbox.bind('<Up>', noop)
-        self.image_listbox.bind('<Down>', noop)
         self.image_list_scrollbar.config(command=self.image_listbox.yview)
         
         self.starred_list_frame = tk.Frame(self.frame,bg='white')
         self.starred_list_scrollbar = tk.Scrollbar(self.starred_list_frame)
         self.starred_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.starred_listbox = tk.Listbox(self.starred_list_frame, yscrollcommand=self.starred_list_scrollbar.set,bg='white')
+        self.starred_listbox = tk.Listbox(self.starred_list_frame, exportselection=False, yscrollcommand=self.starred_list_scrollbar.set,bg='white')
         self.starred_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.starred_listbox.bind('<<ListboxSelect>>', self.on_selection_starred)
-        self.starred_list_scrollbar.config(command=self.image_listbox.yview)
+        self.starred_list_scrollbar.config(command=self.starred_listbox.yview)
 
         buttons = [
             self.alpha_slider,
@@ -374,17 +372,15 @@ class ButtonPanel:
             return
         self.image_listbox.delete(self.current_index)
         self.select_image(self.current_index)
-             
-    def select_image(self, new_index):
+        
+    def select_image_impl(self, new_index, from_starred=False):
         if len(self.images) == 0:
             self.app.clear_messages()
             self.app.display_message("ERROR: No image pairs loaded")
             return
         prev = self.app.image
         self.current_index = new_index % len(self.images)
-        self.image_listbox.selection_clear(0, tk.END)
-        self.image_listbox.selection_set(self.current_index)
-        self.image_listbox.see(self.current_index)
+        
         self.app.image = self.images[self.current_index]
         if self.app.image in self.lru_cache:
             self.lru_cache.remove(self.app.image)
@@ -395,13 +391,23 @@ class ButtonPanel:
             evicted.image = None
             evicted.state = ImageState.EVICTED
             
-        print(self.app.image.image_path)
         cur = self.app.image
         if self.app.automatic_matching:
             self.app.match_images(cur, prev)
             
         self.app.render()
         self.app.sync_sliders()
+        
+             
+    def select_image(self, new_index):
+        # hack to fix 2 listbox issue
+        if time.time() - self.selection_time < 0.1:
+            return
+        self.select_image_impl(new_index)
+        self.image_listbox.selection_clear(0, tk.END)
+        self.image_listbox.selection_set(self.current_index)
+        self.image_listbox.see(self.current_index)
+        
         
     def select_starred_image(self, new_index):
         if len(self.starred_images) == 0:
@@ -411,11 +417,18 @@ class ButtonPanel:
         self.starred_listbox.selection_set(new_index)
         self.starred_listbox.see(new_index)
         selected_image = self.starred_images[new_index]
-        print('new')
-        print(selected_image.image_path)
         image_index = self.images.index(selected_image)
-        print(self.images[image_index].image_path)
-        self.select_image(image_index)
+        self.select_image_impl(image_index,True)
+        self.image_listbox.unbind('<<ListboxSelect>>')
+        self.image_listbox.selection_clear(0, tk.END)
+        self.image_listbox.selection_set(self.current_index)
+        self.image_listbox.see(self.current_index)
+        self.image_listbox.bind('<<ListboxSelect>>', self.on_selection)
+        self.starred_listbox.selection_clear(0, tk.END)
+        self.starred_listbox.selection_set(self.current_starred_index)
+        self.starred_listbox.see(self.current_starred_index)
+        self.selection_time = time.time()
+
 
     def on_selection(self, event):
         selected_index = self.image_listbox.curselection()
