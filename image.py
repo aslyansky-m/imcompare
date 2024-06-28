@@ -113,6 +113,34 @@ def edge_detection(image, blur=5, low_threshold=80, high_threshold=150):
     output = (np.clip(edges + gray*0.6,0,255)).astype(np.uint8)
     return output
 
+def enhance_level_map(level):
+    clip_range = [1, 10]
+    sharpness_range = [0, 1]
+    sharpness_window_range = [0, 10]
+    
+    def interpolate(range):
+        low, high = range
+        return low + (high - low) * (level/10)**2.0
+    
+    clip_limit = interpolate(clip_range)
+    sharpness = interpolate(sharpness_range)
+    sharpness_window = interpolate(sharpness_window_range)
+    return clip_limit, sharpness, sharpness_window
+
+def enhance_image(image, clip_limit, sharpness, sharpness_window, grid_size=8):
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    lab_planes = [x for x in cv2.split(lab)]
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(grid_size, grid_size))
+    lab_planes[0] = clahe.apply(lab_planes[0])
+    lab = cv2.merge(lab_planes)
+    image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    if sharpness > 0 and sharpness_window > 0:
+        blurred = cv2.GaussianBlur(image, (0, 0), sharpness_window)
+        image = cv2.addWeighted(image, 1.0 + sharpness, blurred, -sharpness, 0)
+
+    return image
+
 # enum for state
 class ImageState(Enum):
     NOT_VALID = 0
@@ -124,6 +152,7 @@ class ImageState(Enum):
     LOCKED = 6
     PANORAMA = 7
     EVICTED = 8
+    SYNCED = 9
     
     @staticmethod
     def to_color(state):
@@ -136,7 +165,8 @@ class ImageState(Enum):
             ImageState.MATCHED: 'RosyBrown1',
             ImageState.LOCKED: 'saddle brown',
             ImageState.PANORAMA: 'violet',
-            ImageState.EVICTED: 'gray69'
+            ImageState.EVICTED: 'gray69',
+            ImageState.SYNCED: 'white'
         }
         return colors[state]
     
@@ -161,6 +191,7 @@ class ImageObject:
         
         self.derived_images = []
         self.is_panorama = False
+        self.enhance_cache = None
         
         if not os.path.exists(image_path):
             self.error_message = f"Could not find image: {image_path}"
@@ -178,6 +209,10 @@ class ImageObject:
         if self.state == ImageState.EVICTED:
             self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
             self.state = self.state_stack[-1][6]
+        if self.state == ImageState.SYNCED:
+            self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
+            self.scale_ratio = min(self.window_size[0] / self.image.shape[1], self.window_size[1] / self.image.shape[0])
+            self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
         elif self.state == ImageState.NOT_LOADED or self.image is None:
             try:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
@@ -233,7 +268,7 @@ class ImageObject:
             self.anchors = [Anchor(pos[0], pos[1], original) for pos, original in anchor_states]
 
     def reset_anchors(self):
-        image = self.get_image()
+        image = self.image
         if image is not None:
             m = 30
             w = image.shape[1]
@@ -260,7 +295,7 @@ class ImageObject:
         self.reset_anchors()
         return 
 
-    def render(self, M_global, window_size):
+    def render(self, M_global, window_size, enhance_level=0):
         if self.state == ImageState.NOT_VALID:
             return None
         image = self.get_image()
@@ -268,6 +303,11 @@ class ImageObject:
             return None
         M = calc_transform([image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
+        
+        if enhance_level > 0:
+            if self.enhance_cache is None or self.enhance_cache[0] != enhance_level:
+                self.enhance_cache = (enhance_level, enhance_image(image.copy(), *enhance_level_map(enhance_level)))
+            image = self.enhance_cache[1]
         
         result = cv2.warpPerspective(image, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)
         self.update_derived_images()

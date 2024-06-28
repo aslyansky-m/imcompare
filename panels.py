@@ -118,10 +118,13 @@ class InfoPanel:
         self.scale_box.pack(side="left", padx=2, pady=2)
         self.fps_box = tk.Text(self.frame, height=1, width=30,bg='white')
         self.fps_box.pack(side="left", padx=2, pady=2)
+        self.enhance_box = tk.Text(self.frame, height=1, width=30,bg='white')
+        self.enhance_box.pack(side="left", padx=2, pady=2)
         
         self.update_position([0,0])
         self.update_scale(1.0)
         self.update_fps(0) 
+        self.update_enhance(0)
 
     def update_position(self, position):
         self.position_box.config(state=tk.NORMAL)
@@ -140,6 +143,13 @@ class InfoPanel:
         self.fps_box.delete('1.0', tk.END)
         self.fps_box.insert(tk.END, f"FPS: {fps:.2f}")
         self.fps_box.config(state=tk.DISABLED)
+    
+    def update_enhance(self, enhance):
+        self.enhance_box.config(state=tk.NORMAL)
+        self.enhance_box.delete('1.0', tk.END)
+        self.enhance_box.insert(tk.END, f"Enhance level: {enhance}")
+        self.enhance_box.config(state=tk.DISABLED)
+        
         
 class ButtonPanel:
     def __init__(self, root, app):
@@ -309,6 +319,12 @@ class ButtonPanel:
         if len(parts) > 3:
             parts = parts[-3:]
         result = os.path.join(*parts)
+        
+        parts = os.path.basename(filename).split('_')
+        if len(parts) == 3:
+            date = parts[0]
+            sensor = parts[2].split('.')[0]
+            result = date[:4] + '-' + date[4:6] + '-' + date[6:] + ' ' + sensor
         return result
         
     def add_new_images(self, new_objects):
@@ -319,6 +335,15 @@ class ButtonPanel:
         self.images = new_objects
         self.select_image(0)
         self.app.sync_sliders()
+        
+    def sync_images(self):
+        prev = self.app.image
+        for cur in self.images:
+            if cur == prev:
+                continue
+            cur.scale, cur.rotation, cur.x_offset, cur.y_offset = prev.scale, prev.rotation, prev.x_offset, prev.y_offset
+            cur.M_anchors = prev.M_anchors 
+            cur.state = ImageState.SYNCED
 
     def save_results(self):
         self.app.clear_messages()

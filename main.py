@@ -55,6 +55,8 @@ class ImageAlignerApp:
         self.automatic_matching = False
         self.show_borders = False
         
+        self.enhance_level = 0
+        
         self.panorama_cache = None
         self.num_panoramas = 0
 
@@ -214,7 +216,7 @@ class ImageAlignerApp:
             return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
         
         M_global = self.M_global()
-        im2 = self.image.render(M_global, window_size=self.window_size)
+        im2 = self.image.render(M_global, window_size=self.window_size, enhance_level=self.enhance_level)
         
         if im2 is None:
             return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
@@ -400,7 +402,7 @@ class ImageAlignerApp:
         self.homography_mode = not self.homography_mode
         if len(self.image.anchors) == 0:
             self.image.reset_anchors()
-        self.button_panel.homography_button.config(text="Homography Mode:  ON" if self.homography_mode else "Homography Mode: OFF", bg=('grey' if self.homography_mode else 'white'))
+        self.button_panel.homography_mode_button.config(text="Homography Mode:  ON" if self.homography_mode else "Homography Mode: OFF", bg=('grey' if self.homography_mode else 'white'))
         self.render()
 
     def toggle_contrast_mode(self):
@@ -509,13 +511,17 @@ class ImageAlignerApp:
         self.clear_messages()
         self.display_message(text)
     
+    def update_enhance_level(self, val):
+        self.enhance_level = np.clip(int(val), 0, 10)
+        self.info_panel.update_enhance(self.enhance_level)
+    
     def on_key_press(self, event):
         if event.char == 'r':
             self.update_rotation(self.image.rotation + 90)
         elif event.char == '-':
-            self.global_scale /= 1.25
+            self.update_enhance_level(self.enhance_level - 1)
         elif event.char == '=':
-            self.global_scale *= 1.25
+            self.update_enhance_level(self.enhance_level + 1)
         elif event.char == 'd':
             self.toggle_debug_mode()
         elif event.char == 'c':
@@ -544,6 +550,8 @@ class ImageAlignerApp:
             self.run_matching()
         elif event.char == 's':
             self.button_panel.add_starred_image(self.image)
+        elif event.char == 'y':
+            self.button_panel.sync_images()
         elif event.keysym == 'Right':
             self.button_panel.select_image(self.button_panel.current_index + 1)
         elif event.keysym == 'Left' or event.keysym == 'Up':
