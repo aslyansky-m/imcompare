@@ -269,8 +269,8 @@ class ButtonPanel:
     def show_help(self, is_active):
         descriptions = [
             ('r', "Rotate by 90 degrees"),
-            ('+', "Zoom in 10%"),
-            ('-', "Zoom out 10%"),
+            ('+', "Zoom in 25%"),
+            ('-', "Zoom out 25%"),
             ('d', "Debug mode"),
             ('c', "Contrast mode"),
             ('e', "Edge detection mode"),

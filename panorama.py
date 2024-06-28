@@ -8,6 +8,14 @@ from tkinter import ttk
 def sift_matching_with_homography(img1, img2):
     gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
+    max_size = 1000
+    H_scale = np.eye(3)
+    if gray1.shape[0] > max_size or gray1.shape[1] > max_size:
+        scale = max_size / max(gray1.shape[0], gray1.shape[1])
+        new_shape = (int(gray1.shape[1] * scale), int(gray1.shape[0] * scale))
+        H_scale = np.diag([scale, scale, 1])
+        gray1 = cv2.warpPerspective(gray1, H_scale, new_shape)
+        gray2 = cv2.warpPerspective(gray2, H_scale, new_shape)
     sift = cv2.SIFT_create()
     keypoints1, descriptors1 = sift.detectAndCompute(gray1, None)
     keypoints2, descriptors2 = sift.detectAndCompute(gray2, None)
@@ -22,7 +30,7 @@ def sift_matching_with_homography(img1, img2):
         src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 2)
         dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 2)
         H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        return H
+        return np.linalg.inv(H_scale) @ H @ H_scale
     else:
         return None
 

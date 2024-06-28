@@ -513,9 +513,9 @@ class ImageAlignerApp:
         if event.char == 'r':
             self.update_rotation(self.image.rotation + 90)
         elif event.char == '-':
-            self.global_scale *= 0.9
+            self.global_scale /= 1.25
         elif event.char == '=':
-            self.global_scale *= 1.1
+            self.global_scale *= 1.25
         elif event.char == 'd':
             self.toggle_debug_mode()
         elif event.char == 'c':
