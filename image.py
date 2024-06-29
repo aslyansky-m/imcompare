@@ -114,13 +114,13 @@ def edge_detection(image, blur=5, low_threshold=80, high_threshold=150):
     return output
 
 def enhance_level_map(level):
-    clip_range = [1, 10]
-    sharpness_range = [0, 1]
-    sharpness_window_range = [0, 10]
+    clip_range = [1, 20]
+    sharpness_range = [0, 0.3]
+    sharpness_window_range = [0, 5]
     
     def interpolate(range):
         low, high = range
-        return low + (high - low) * (level/10)**2.0
+        return low + (high - low) * (level/10)**3.0
     
     clip_limit = interpolate(clip_range)
     sharpness = interpolate(sharpness_range)
