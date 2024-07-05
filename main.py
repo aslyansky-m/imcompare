@@ -38,6 +38,7 @@ class ImageAlignerApp:
         self.global_x_offset = 0
         self.global_y_offset = 0
         self.global_scale = 1.0
+        self.global_rotation = 0
         
         self.dragging = False
         self.drag_start_x = 0
@@ -188,7 +189,7 @@ class ImageAlignerApp:
             
         self.last_global_scale = self.global_scale
             
-        M = translation_matrix([self.global_x_offset, self.global_y_offset]) @ translation_matrix(center)@scale_matrix(self.global_scale)@translation_matrix(-center)
+        M = translation_matrix([self.global_x_offset, self.global_y_offset]) @ translation_matrix(center)@ rotation_matrix(self.global_rotation) @scale_matrix(self.global_scale)@translation_matrix(-center)
         return M
 
     def match_images(self, cur, prev):
@@ -531,7 +532,7 @@ class ImageAlignerApp:
             pos = apply_homography(np.linalg.inv(M_global), pos)
             pos = self.map.pix2gps(pos)
         
-        heading = 0
+        heading = np.rad2deg(self.global_rotation)
         
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 1
@@ -600,6 +601,12 @@ class ImageAlignerApp:
             self.update_enhance_level(self.image.enhance_level - 1)
         elif event.char == '=':
             self.update_enhance_level(self.image.enhance_level + 1)
+        elif event.char == '.':
+            self.global_rotation += np.deg2rad(10)
+        elif event.char == ',': 
+            self.global_rotation -= np.deg2rad(10)
+        elif event.char == '/':
+            self.global_rotation = 0
         elif event.char == 'd':
             self.toggle_debug_mode()
         elif event.char == 'c':
