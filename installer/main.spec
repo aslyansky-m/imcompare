@@ -12,12 +12,11 @@ additional_packages = list()
 for package in pkgutil.iter_modules(rasterio.__path__, prefix="rasterio."):
     additional_packages.append(package.name)
 	
-dlls = glob("C:\\Users\\maxima\\anaconda3\\envs\\imcompare\\Lib\\site-packages\\rasterio.libs\\*.dll")
-dlls = [(x,'.') for x in dlls]
+dlls = [(x,'.') for x in glob("C:\\Users\\maxima\\anaconda3\\envs\\imcompare\\Lib\\site-packages\\rasterio.libs\\*.dll")]
 
 
-resources = [('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\logo.jpg','resources\\logo.jpg'),
-            ('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\compass.png','resources\\compass.png'),
+resources = [('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\logo.jpg','resources'),
+            ('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\compass.png','resources'),
 			("C:\\Users\\maxima\\anaconda3\\envs\\imcompare\\Lib\\site-packages\\matplotlib\\mpl-data", "matplotlib/mpl-data"),]
 
 a = Analysis(

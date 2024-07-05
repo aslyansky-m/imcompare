@@ -8,6 +8,17 @@ from process_raw import ImageProcessorApp
 from image import *
 from common import *
 import time
+import sys
+
+def resource_path(relative_path):
+    """ Get the absolute path to the resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 def filename_to_title(filename):
     normalized_path = os.path.normpath(filename)
@@ -442,7 +453,7 @@ class ButtonPanel:
         # end_y = int(circle_center[1] - circle_radius * math.cos(angle))
         # cv2.arrowedLine(im, circle_center, (end_x, end_y), (255, 0, 0), arrow_thickness, tipLength=0.3)
 
-        compass_img = cv2.imread('resources/compass.png', cv2.IMREAD_UNCHANGED)
+        compass_img = cv2.imread(resource_path('resources/compass.png'), cv2.IMREAD_UNCHANGED)
         compass_size = 200
         compass_size = [compass_size, int(compass_size*compass_img.shape[0]/compass_img.shape[1])]
         compass_img = cv2.resize(compass_img, compass_size, interpolation=cv2.INTER_AREA)

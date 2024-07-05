@@ -82,8 +82,9 @@ class ImageAlignerApp:
         self.window_size = [int(screen_size[0]*0.85), int(screen_size[1]*0.96)]
         self.root.title("TagIm Aligning App")
         self.root.geometry(f"{screen_size[0]}x{screen_size[1]}")
-        if os.path.exists('resources/logo.jpg'):
-            photo = ImageTk.PhotoImage(Image.open('resources/logo.jpg'))
+        logo_path = resource_path('resources/logo.jpg')
+        if os.path.exists(logo_path):
+            photo = ImageTk.PhotoImage(Image.open(logo_path))
             self.root.wm_iconphoto(False, photo)
 
     def setup_bindings(self):
