@@ -130,6 +130,8 @@ class InfoPanel:
         self.position_box.pack(side="left", padx=2, pady=2)
         self.scale_box = tk.Text(self.frame, height=1, width=30,bg='white')
         self.scale_box.pack(side="left", padx=2, pady=2)
+        self.heading_box = tk.Text(self.frame, height=1, width=30,bg='white')
+        self.heading_box.pack(side="left", padx=2, pady=2)
         self.fps_box = tk.Text(self.frame, height=1, width=30,bg='white')
         self.fps_box.pack(side="left", padx=2, pady=2)
         self.enhance_box = tk.Text(self.frame, height=1, width=30,bg='white')
@@ -137,6 +139,7 @@ class InfoPanel:
         
         self.update_position([0,0])
         self.update_scale(1.0)
+        self.update_heading(0)
         self.update_fps(0) 
         self.update_enhance(0)
 
@@ -151,6 +154,12 @@ class InfoPanel:
         self.scale_box.delete('1.0', tk.END)
         self.scale_box.insert(tk.END, f"Scale: [1:{1/scale:.2f}]")
         self.scale_box.config(state=tk.DISABLED)
+        
+    def update_heading(self, heading):
+        self.heading_box.config(state=tk.NORMAL)
+        self.heading_box.delete('1.0', tk.END)
+        self.heading_box.insert(tk.END, f"Heading: {heading:.2f}°")
+        self.heading_box.config(state=tk.DISABLED)
     
     def update_fps(self, fps):
         self.fps_box.config(state=tk.NORMAL)
@@ -176,9 +185,9 @@ class ButtonPanel:
         self.current_starred_index = 0
         self.images = []
         self.starred_images = []
-        self.output_folder = None
         self.lru_cache = []
         self.selection_time = 0
+        self.output_folder = None
         
     def toggle_panel(self):
         if self.panel.winfo_ismapped():
@@ -232,7 +241,7 @@ class ButtonPanel:
         
         # sub panel
         self.panel = self.create_panel()
-        self.panel_button = tk.Button(self.frame, text="Show Controls", command=self.toggle_panel,bg='white')
+        self.panel_button = tk.Button(self.frame, text="Show Controls", command=self.toggle_panel,bg='gray81')
         self.help_button = tk.Button(self.frame, text="Help: OFF", command=self.app.toggle_help_mode,bg='white')
         
         self.help_frame = tk.Frame(self.frame)
@@ -292,23 +301,28 @@ class ButtonPanel:
     
     def show_help(self, is_active):
         descriptions = [
-            ('r', "Rotate by 90 degrees"),
+            ('space', "Change field of view"),
             ('+', "Increse enhance level"),
             ('-', "Decrease enhance level"),
+            ('>', "Increse heading"),
+            ('<', "Decrease heading"),
+            ('/', "Zero heading"),
+            ('r', "Rotate by 90 degrees"),
+            ('f', "Set/unset reference image"),
             ('d', "Debug mode"),
             ('c', "Contrast mode"),
             ('e', "Edge detection mode"),
-            ('space', "Change field of view"),
             ('h', "Homography mode"),
             ('o', "Reset homography"),
             ('p', "Create panorama"),
             ('s', "Add image to starred list"),
             ('i', "Print coordinates"),
+            ('k', "Save screenshot"),
             ('q', "Reset settings"),
-            ('m', "Automatic matching"),
+            ('a', "Toggle automatic matching"),
             ('g', "Toggle grid visibility"),
             ('b', "Toggle borders visibility"),
-            ('a', "Run image matching"),
+            ('m', "Run image matching"),
             ('->', "Next image"),
             ('<-', "Previous image"),
             ('Control-z', "Undo last action"),
@@ -347,18 +361,15 @@ class ButtonPanel:
 
     def save_results(self):
         self.app.clear_messages()
-        if True or not self.output_folder:
-            self.output_folder = filedialog.askdirectory(title='Select output folder...')
-        if not self.output_folder:
+        output_file = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not output_file:
             self.app.display_message("ERROR: Please select an output folder")
             return
-        output_file = f"{self.output_folder}/results.csv"
         images_to_save = [self.app.image]
         if len(self.images) > 0:
             images_to_save = self.images
             
         data_to_write = []
-
         for i, image_object in enumerate(images_to_save):
             data_to_write.append(dict(images=image_object.image_path, homography=image_object.relative_transform().flatten(),map_path=self.app.map.map_file))
         
@@ -367,7 +378,7 @@ class ButtonPanel:
         
     def on_save_image(self, event=None):
         self.app.clear_messages()
-        if True or not self.output_folder:
+        if not self.output_folder:
             self.output_folder = filedialog.askdirectory(title='Select output folder...')
         if not self.output_folder:
             self.app.display_message("ERROR: Please select an output folder")
@@ -380,6 +391,69 @@ class ButtonPanel:
         dump_geotif(query_aligned, bbox_gps, output_file)
         
         self.app.display_message(f"Saved results to {output_file}")
+        
+    def save_screen_shot(self):
+        self.app.clear_messages()
+        file_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG files", "*.png")])
+        if not file_path:
+            return
+        M_global = self.app.M_global()
+        im = self.app.image.render(M_global, window_size=self.app.window_size)
+        if im is None:
+            return 
+        image_name = filename_to_title(self.app.image.image_path)
+        im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+        pos = [self.app.window_size[0]//2, self.app.window_size[0]//2]
+        if self.app.map is not None:
+            pos = apply_homography(np.linalg.inv(M_global), pos)
+            pos = self.app.map.pix2gps(pos)
+        
+        heading = self.app.global_rotation
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1
+        thickness = 2
+        margin = 10
+        
+        text1 = image_name
+        text2 = f"GPS: {pos[0]:.6f}, {pos[1]:.6f}"
+        window_size = im.shape
+        (text_width1, text_height1), _ = cv2.getTextSize(text1, font, font_scale, thickness)
+        (text_width2, text_height2), _ = cv2.getTextSize(text2, font, font_scale, thickness)
+        
+        x = window_size[1] - max(text_width1, text_width2) - margin
+        y1 = window_size[0] - margin - text_height1 - text_height2 - 10
+        y2 = window_size[0] - margin - text_height2
+        box_color = (255, 255, 255) 
+        cv2.rectangle(im,(x, y1 - text_height1 - margin),(window_size[1], window_size[0]),(255, 255, 255),cv2.FILLED)
+
+        # Put the text in black color
+        text_color = (0, 0, 0)  # Black color
+        im = cv2.putText(im, text1, (x, y1), font, font_scale, text_color, thickness, cv2.LINE_AA)
+        im = cv2.putText(im, text2, (x, y2), font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+        # # Draw the north arrow on a circle
+        # arrow_thickness = 6
+        # circle_radius = 30
+        # circle_center = (window_size[1] - margin - circle_radius - 10, window_size[0] - margin - 2*circle_radius - 80)
+        # cv2.circle(im, circle_center, int(circle_radius*1.2), (200, 200, 200), -1)  # Filled gray circle
+        # angle = math.radians(heading)
+        # end_x = int(circle_center[0] + circle_radius * math.sin(angle))
+        # end_y = int(circle_center[1] - circle_radius * math.cos(angle))
+        # cv2.arrowedLine(im, circle_center, (end_x, end_y), (255, 0, 0), arrow_thickness, tipLength=0.3)
+
+        compass_img = cv2.imread('resources/compass.png', cv2.IMREAD_UNCHANGED)
+        compass_size = 200
+        compass_size = [compass_size, int(compass_size*compass_img.shape[0]/compass_img.shape[1])]
+        compass_img = cv2.resize(compass_img, compass_size, interpolation=cv2.INTER_AREA)
+        (h, w) = compass_img.shape[:2]
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, -heading, 1.0)  
+        rotated_compass = cv2.warpAffine(compass_img, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+        compass_pos = (window_size[1] - compass_size[0], window_size[0] - 2*margin - compass_size[1] - 80)
+        im[compass_pos[1]:compass_pos[1]+compass_size[1], compass_pos[0]:compass_pos[0]+compass_size[0], :] = rotated_compass 
+        cv2.imwrite(file_path, im)
+        self.app.display_message(f"Screen shot saved to: {file_path}")
         
     def on_delete(self, event):
         
