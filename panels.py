@@ -9,6 +9,20 @@ from image import *
 from common import *
 import time
 
+def filename_to_title(filename):
+    normalized_path = os.path.normpath(filename)
+    parts = normalized_path.split(os.sep)
+    if len(parts) > 3:
+        parts = parts[-3:]
+    result = os.path.join(*parts)
+    
+    parts = os.path.basename(filename).split('_')
+    if len(parts) == 3:
+        date = parts[0]
+        sensor = parts[2].split('.')[0]
+        result = date[:4] + '-' + date[4:6] + '-' + date[6:] + ' ' + sensor
+    return result
+
 class MenuBar:
     def __init__(self, root, app):
         self.root = root
@@ -312,25 +326,11 @@ class ButtonPanel:
             for key, description in descriptions:
                 self.help_text_box.insert(tk.END, f"{key}: {description}\n")
             self.help_text_box.config(state=tk.DISABLED)
-    
-    def filename_to_title(self, filename):
-        normalized_path = os.path.normpath(filename)
-        parts = normalized_path.split(os.sep)
-        if len(parts) > 3:
-            parts = parts[-3:]
-        result = os.path.join(*parts)
-        
-        parts = os.path.basename(filename).split('_')
-        if len(parts) == 3:
-            date = parts[0]
-            sensor = parts[2].split('.')[0]
-            result = date[:4] + '-' + date[4:6] + '-' + date[6:] + ' ' + sensor
-        return result
         
     def add_new_images(self, new_objects):
         self.image_listbox.delete(0,tk.END)
         for new_object in new_objects:
-            result = self.filename_to_title(new_object.image_path)
+            result = filename_to_title(new_object.image_path)
             self.image_listbox.insert(tk.END, result)
         self.images = new_objects
         self.select_image(0)
@@ -472,7 +472,8 @@ class ButtonPanel:
     def add_starred_image(self, image):
         if image in self.starred_images:
             self.starred_images.remove(image)
-        self.starred_images.append(image)
+        else:
+            self.starred_images.append(image)
         self.update_starred_listbox()
         
     def update_listbox(self):
@@ -490,12 +491,22 @@ class ButtonPanel:
         for image in self.starred_images:
             index = self.images.index(image)
             self.image_listbox.itemconfig(index, bg=ImageState.to_color(image.state), fg='DarkGoldenrod4')
+        
+        image = self.app.reference_image
+        if image is not None:
+            index = self.images.index(image)
+            self.image_listbox.itemconfig(index, bg='red', fg='black')
     
     def update_starred_listbox(self):
         self.starred_listbox.delete(0,tk.END)
         for image in self.starred_images:
-            result = self.filename_to_title(image.image_path)
+            result = filename_to_title(image.image_path)
             self.starred_listbox.insert(tk.END, result)
+            
+        image = self.app.reference_image
+        if image is not None:
+            index = self.starred_images.index(image)
+            self.starred_listbox.itemconfig(index, bg='red', fg='black')
     
     def run_raw_processing(self):
         try:

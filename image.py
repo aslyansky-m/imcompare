@@ -115,12 +115,14 @@ def edge_detection(image, blur=5, low_threshold=80, high_threshold=150):
 
 def enhance_level_map(level):
     clip_range = [1, 20]
-    sharpness_range = [0, 0.3]
-    sharpness_window_range = [0, 5]
+    sharpness_range = [0, 0.5]
+    sharpness_window_range = [1, 5]
+    max_level = 5
+    level = np.clip(level, 0, max_level)
     
     def interpolate(range):
         low, high = range
-        return low + (high - low) * (level/10)**3.0
+        return low + (high - low) * (level/max_level)**3.0
     
     clip_limit = interpolate(clip_range)
     sharpness = interpolate(sharpness_range)
@@ -128,16 +130,16 @@ def enhance_level_map(level):
     return clip_limit, sharpness, sharpness_window
 
 def enhance_image(image, clip_limit, sharpness, sharpness_window, grid_size=8):
+    if sharpness > 0 and sharpness_window > 0:
+        blurred = cv2.GaussianBlur(image, (0, 0), sharpness_window)
+        image = cv2.addWeighted(image, 1.0 + sharpness, blurred, -sharpness, 0)
+        
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     lab_planes = [x for x in cv2.split(lab)]
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(grid_size, grid_size))
     lab_planes[0] = clahe.apply(lab_planes[0])
     lab = cv2.merge(lab_planes)
     image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-    if sharpness > 0 and sharpness_window > 0:
-        blurred = cv2.GaussianBlur(image, (0, 0), sharpness_window)
-        image = cv2.addWeighted(image, 1.0 + sharpness, blurred, -sharpness, 0)
 
     return image
 
@@ -185,6 +187,7 @@ class ImageObject:
         self.error_message = ''
         self.image = None
         self.window_size = window_size
+        self.enhance_level = 0
 
         self.state_stack = []
         self.current_state_index = -1
@@ -204,6 +207,8 @@ class ImageObject:
 
         
     def get_image(self):
+        if self.image is not None:
+            return self.image
         if self.state == ImageState.NOT_VALID:
             return None
         if self.state == ImageState.EVICTED:
@@ -213,7 +218,8 @@ class ImageObject:
             self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
             self.scale_ratio = min(self.window_size[0] / self.image.shape[1], self.window_size[1] / self.image.shape[0])
             self.M_original = np.diag([self.scale_ratio, self.scale_ratio, 1])
-        elif self.state == ImageState.NOT_LOADED or self.image is None:
+            self.state = ImageState.LOADED
+        elif self.state == ImageState.NOT_LOADED:
             try:
                 self.image = cv2.cvtColor(cv2.imread(self.image_path), cv2.COLOR_BGR2RGB)
                 self.scale_ratio = min(self.window_size[0] / self.image.shape[1], self.window_size[1] / self.image.shape[0])
@@ -295,7 +301,7 @@ class ImageObject:
         self.reset_anchors()
         return 
 
-    def render(self, M_global, window_size, enhance_level=0):
+    def render(self, M_global, window_size):
         if self.state == ImageState.NOT_VALID:
             return None
         image = self.get_image()
@@ -304,9 +310,9 @@ class ImageObject:
         M = calc_transform([image.shape[1] * self.scale_ratio, image.shape[0] * self.scale_ratio], self.scale, self.rotation, self.x_offset, self.y_offset)
         H = calc_homography(self.anchors)
         
-        if enhance_level > 0:
-            if self.enhance_cache is None or self.enhance_cache[0] != enhance_level:
-                self.enhance_cache = (enhance_level, enhance_image(image.copy(), *enhance_level_map(enhance_level)))
+        if self.enhance_level > 0:
+            if self.enhance_cache is None or self.enhance_cache[0] != self.enhance_level:
+                self.enhance_cache = (self.enhance_level, enhance_image(image.copy(), *enhance_level_map(self.enhance_level)))
             image = self.enhance_cache[1]
         
         result = cv2.warpPerspective(image, M_global @ H @ self.M_anchors @ M @ self.M_original, window_size)

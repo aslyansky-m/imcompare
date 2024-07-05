@@ -55,10 +55,9 @@ class ImageAlignerApp:
         self.automatic_matching = False
         self.show_borders = False
         
-        self.enhance_level = 0
-        
         self.panorama_cache = None
         self.num_panoramas = 0
+        self.reference_image = None
 
         self.configure_window()
         self.debug_info = DebugInfo(root, self)
@@ -202,33 +201,37 @@ class ImageAlignerApp:
  
         H_rel = sift_matching_with_homography(cur.get_image(), prev.get_image())
         if H_rel is None:
-            cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
+            self.clear_messages()
+            self.display_message(f"WARNING: Could not calculate homography between frames {filename_to_title(prev.image_path)} and {filename_to_title(cur.image_path)}")
+            #cur.scale, cur.rotation, cur.x_offset, cur.y_offset, cur.M_anchors = prev.scale, prev.rotation, prev.x_offset, prev.y_offset, prev.M_anchors
         else:
-            prev.derived_images.append((cur, H_rel))
+            # prev.derived_images.append((cur, H_rel))
             H_prev = prev.M_anchors @ calc_transform([prev.image.shape[1] * prev.scale_ratio, prev.image.shape[0] * prev.scale_ratio], prev.scale, prev.rotation, prev.x_offset, prev.y_offset) @ prev.M_original
             cur_H =  H_prev @ H_rel @ np.linalg.inv(cur.M_original)
             cur.initialize_from_homography(cur_H)
-        cur.reset_anchors()
-        cur.state = ImageState.MATCHED
+            cur.reset_anchors()
+            cur.state = ImageState.MATCHED
     
     def blend_images(self):
         if self.map is None:
             return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
         
         M_global = self.M_global()
-        im2 = self.image.render(M_global, window_size=self.window_size, enhance_level=self.enhance_level)
+        im2 = self.image.render(M_global, window_size=self.window_size)
         
         if im2 is None:
             return np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
         
-        M_global = self.M_global()
-        if self.last_map is None or not (M_global==self.last_state).all():
-            self.last_map = self.map.warp_map(M_global, self.window_size)
-            if self.last_map is None:
-                self.last_map = np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
-            self.last_state = M_global
-        
-        im1 = self.last_map.copy()
+        if self.reference_image is None:
+            if self.last_map is None or not (M_global==self.last_state).all():
+                self.last_map = self.map.warp_map(M_global, self.window_size)
+                if self.last_map is None:
+                    self.last_map = np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
+                self.last_state = M_global
+            
+            im1 = self.last_map.copy()
+        else:
+            im1 = self.reference_image.render(M_global, window_size=self.window_size)
         
         if im1 is None:
             im1 = np.zeros((self.window_size[1], self.window_size[0], 3), dtype=np.uint8)
@@ -283,6 +286,7 @@ class ImageAlignerApp:
         fps = 1/(time.time()-t)
         self.info_panel.update_fps(fps)
         self.info_panel.update_scale(self.global_scale)
+        self.info_panel.update_enhance(self.image.enhance_level)
         
         self.button_panel.update_listbox()
 
@@ -510,18 +514,92 @@ class ImageAlignerApp:
         text = self.info_panel.position_box.get("1.0",tk.END)
         self.clear_messages()
         self.display_message(text)
+        
+    def make_screen_shot(self):
+        self.clear_messages()
+        file_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG files", "*.png")])
+        if not file_path:
+            return
+        M_global = self.M_global()
+        im = self.image.render(M_global, window_size=self.window_size)
+        if im is None:
+            return 
+        image_name = filename_to_title(self.image.image_path)
+        im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+        pos = [self.window_size[0]//2, self.window_size[0]//2]
+        if self.map is not None:
+            pos = apply_homography(np.linalg.inv(M_global), pos)
+            pos = self.map.pix2gps(pos)
+        
+        heading = 0
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1
+        thickness = 2
+        margin = 10
+        
+        text1 = image_name
+        text2 = f"GPS: {pos[0]:.6f}, {pos[1]:.6f}"
+        window_size = im.shape
+        (text_width1, text_height1), _ = cv2.getTextSize(text1, font, font_scale, thickness)
+        (text_width2, text_height2), _ = cv2.getTextSize(text2, font, font_scale, thickness)
+        
+        x = window_size[1] - max(text_width1, text_width2) - margin
+        y1 = window_size[0] - margin - text_height1 - text_height2 - 10
+        y2 = window_size[0] - margin - text_height2
+        box_color = (255, 255, 255) 
+        cv2.rectangle(im,(x, y1 - text_height1 - margin),(window_size[1], window_size[0]),(255, 255, 255),cv2.FILLED)
+
+        # Put the text in black color
+        text_color = (0, 0, 0)  # Black color
+        im = cv2.putText(im, text1, (x, y1), font, font_scale, text_color, thickness, cv2.LINE_AA)
+        im = cv2.putText(im, text2, (x, y2), font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+        # # Draw the north arrow on a circle
+        # arrow_thickness = 6
+        # circle_radius = 30
+        # circle_center = (window_size[1] - margin - circle_radius - 10, window_size[0] - margin - 2*circle_radius - 80)
+        # cv2.circle(im, circle_center, int(circle_radius*1.2), (200, 200, 200), -1)  # Filled gray circle
+        # angle = math.radians(heading)
+        # end_x = int(circle_center[0] + circle_radius * math.sin(angle))
+        # end_y = int(circle_center[1] - circle_radius * math.cos(angle))
+        # cv2.arrowedLine(im, circle_center, (end_x, end_y), (255, 0, 0), arrow_thickness, tipLength=0.3)
+
+        compass_img = cv2.imread('resources/compass.png', cv2.IMREAD_UNCHANGED)
+        compass_size = 200
+        compass_size = [compass_size, int(compass_size*compass_img.shape[0]/compass_img.shape[1])]
+        compass_img = cv2.resize(compass_img, compass_size, interpolation=cv2.INTER_AREA)
+        (h, w) = compass_img.shape[:2]
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, -heading, 1.0)  
+        rotated_compass = cv2.warpAffine(compass_img, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+        compass_pos = (window_size[1] - compass_size[0], window_size[0] - 2*margin - compass_size[1] - 80)
+        im[compass_pos[1]:compass_pos[1]+compass_size[1], compass_pos[0]:compass_pos[0]+compass_size[0], :] = rotated_compass 
+        cv2.imwrite(file_path, im)
+        self.display_message(f"Screen shot saved to: {file_path}")
+        
+    def set_reference_frame(self):
+        if self.reference_image is not None:                
+            self.reference_image = None
+        else:
+            self.reference_image = self.image
+        
+        flag1 = self.image in self.button_panel.starred_images
+        flag2 =  self.reference_image is not None
+        if flag1 and not flag2 or not flag1 and flag2:
+            self.button_panel.add_starred_image(self.image)            
     
     def update_enhance_level(self, val):
-        self.enhance_level = np.clip(int(val), 0, 10)
-        self.info_panel.update_enhance(self.enhance_level)
+        self.image.enhance_level = np.clip(int(val), 0, 5)
+        self.info_panel.update_enhance(self.image.enhance_level)
     
     def on_key_press(self, event):
         if event.char == 'r':
             self.update_rotation(self.image.rotation + 90)
         elif event.char == '-':
-            self.update_enhance_level(self.enhance_level - 1)
+            self.update_enhance_level(self.image.enhance_level - 1)
         elif event.char == '=':
-            self.update_enhance_level(self.enhance_level + 1)
+            self.update_enhance_level(self.image.enhance_level + 1)
         elif event.char == 'd':
             self.toggle_debug_mode()
         elif event.char == 'c':
@@ -538,6 +616,10 @@ class ImageAlignerApp:
             self.create_panorama()
         elif event.char == 'i':
             self.print_coords()
+        elif event.char == 'k':
+            self.make_screen_shot()
+        elif event.char == 'f':
+            self.set_reference_frame()
         elif event.char == 'q':
             self.reset()
         elif event.char == 'm':
@@ -556,6 +638,10 @@ class ImageAlignerApp:
             self.button_panel.select_image(self.button_panel.current_index + 1)
         elif event.keysym == 'Left' or event.keysym == 'Up':
             self.button_panel.select_image(self.button_panel.current_index - 1)
+        elif event.char >= '1' and event.char <= '9':
+            to_select = int(event.char) - 1
+            if to_select < len(self.button_panel.starred_images):
+                self.button_panel.select_starred_image(to_select)
         self.render()
 
     def on_key_release(self, event):

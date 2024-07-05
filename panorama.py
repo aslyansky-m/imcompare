@@ -30,6 +30,8 @@ def sift_matching_with_homography(img1, img2):
         src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 2)
         dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 2)
         H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        if H is None or np.linalg.det(H) == 0 or np.sum(mask) < 20 or np.mean(mask) < 0.1:
+            return None
         return np.linalg.inv(H_scale) @ H @ H_scale
     else:
         return None
