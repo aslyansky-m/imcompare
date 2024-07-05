@@ -17,6 +17,7 @@ dlls = [(x,'.') for x in dlls]
 
 
 resources = [('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\logo.jpg','resources\\logo.jpg'),
+            ('C:\\Users\\maxima\\Documents\\repos\\imcompare\\resources\\compass.png','resources\\compass.png'),
 			("C:\\Users\\maxima\\anaconda3\\envs\\imcompare\\Lib\\site-packages\\matplotlib\\mpl-data", "matplotlib/mpl-data"),]
 
 a = Analysis(
